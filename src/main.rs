@@ -1,32 +1,34 @@
+mod action;
+
 use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::{Rng, thread_rng};
 use Character::Assassin;
+use crate::action::{Action, BlockAction, ChallengeAction, CoupAction, LoseAction, ProposableAction, ProposedAction, Prove, ProveAction};
+use crate::action::ProposableAction::{ForeignAid};
 use crate::Character::{Ambassador, Captain, Contessa, Duke};
 use crate::CharacterAction::{Assassinate, Exchange, Steal, Tax};
-use crate::CoupError::InvalidAction;
 
 #[derive(Clone)]
 struct Proposal {
-    proposer_player_idx: usize,
-    action: Action,
+    proposed_action: ProposedAction,
     response: Option<ProposalResponses>,
 }
 
 #[derive(Clone)]
 struct Block {
-    blocker_player_idx: usize,
+    block_action: BlockAction,
     response: Option<BlockResponses>,
 }
 
 #[derive(Clone)]
 struct Challenge {
-    challenger_player_idx: usize,
-    response: ChallengeResponses,
+    challenge_action: ChallengeAction,
+    response: Option<ChallengeResponses>,
 }
 
 #[derive(Clone)]
 struct Reveal {
-    challenger_player_idx: usize,
+    revealer_player_idx: usize,
     response: RevealResponses,
 }
 
@@ -67,7 +69,6 @@ enum Character {
     Contessa,
 }
 
-
 static CHARACTER_VARIANTS: [Character; 5] = [
     Character::Duke,
     Assassin,
@@ -80,7 +81,7 @@ static CHARACTER_VARIANTS: [Character; 5] = [
 #[derive(Clone)]
 struct Player {
     money: u8,
-    influence_cards: Vec<Character>,
+    influence_cards: Vec<(Character, bool)>, // (character, revealed)
 }
 
 #[derive(Debug)]
@@ -88,6 +89,11 @@ enum CoupError {
     InvalidAction(Action),
 }
 
+#[derive(Clone)]
+struct Loser {
+    loser_player_idx: usize,
+    loser_lost_challenge: Option<ChallengeAction>,
+}
 
 #[derive(Clone)]
 struct Coup {
@@ -97,6 +103,9 @@ struct Coup {
 
     priority_player_idx: Option<usize>,
     proposal: Option<Proposal>,
+    num_remaining_passers: Option<usize>,
+
+    loser: Option<Loser>,
 
     deck: Vec<Character>,
     players: Vec<Player>,
@@ -115,7 +124,7 @@ impl Coup {
 
         let mut players = (0..num_players).map(|_| Player {
             money: 2,
-            influence_cards: vec![deck.remove(0), deck.remove(0)],
+            influence_cards: vec![(deck.remove(0), false), (deck.remove(0), false)],
         }).collect();
 
         Self {
@@ -123,6 +132,8 @@ impl Coup {
             current_player_idx: 0,
             priority_player_idx: None,
             proposal: None,
+            num_remaining_passers: None,
+            loser: None,
             deck,
             players,
         }
@@ -151,109 +162,191 @@ impl Coup {
         // clear priority
         self.priority_player_idx = None;
 
+        // clear passer counter
+        self.num_remaining_passers = None;
+
+        // reset proposal
+        self.proposal = None;
+
         // go to next player
-        self.current_player_idx = (self.current_player_idx + 1) % self.players.len();
+        self.current_player_idx = self.next_living_player();
+    }
+
+    fn go_next_prio(&mut self) {
+        self.priority_player_idx = Some(self.next_prio_player_idx());
     }
 
     fn replace_influence_card(&mut self, player_idx: usize, card_idx: usize) {
         let card = self.players[player_idx].influence_cards.remove(card_idx);
-        self.deck.push(card);
+        self.deck.push(card.0);
 
         let mut rng = thread_rng();
         self.deck.shuffle(&mut rng);
 
-        self.players[player_idx].influence_cards.push(self.deck.remove(0));
+        self.players[player_idx].influence_cards.push((self.deck.remove(0), false));
+    }
+
+    fn lose_influence_card(&mut self, player_idx: usize, card_idx: usize) {
+        // 'losing' an influence means your card is flipped up and revealed and doesn't count
+        self.players[player_idx].influence_cards[card_idx].1 = true;
+    }
+
+    fn is_player_dead(&self, player_idx: usize) -> bool {
+        self.players[player_idx].influence_cards.iter().filter(|x| x.1 == false).count() == 0
     }
 
     fn gen_actions(&self) -> Vec<Action> {
         let mut actions = vec![];
 
+        // a player is tasked with choosing a card to discard
+        if let Some(loser) = &self.loser {
+            for card_idx in 0..self.players[loser.loser_player_idx].influence_cards.len() {
+                actions.push(Action::Lose(LoseAction {
+                    loser_player_idx: loser.loser_player_idx,
+                    discarded_influence_card_idx: card_idx,
+                }));
+            }
+            return actions;
+        }
+
         fn add_proposal_actions(game: &Coup, actions: &mut Vec<Action>) {
             // forced coup
             if game.players[game.current_player_idx].money >= 10 {
                 for opponent_idx in game.other_player_indexes(game.current_player_idx) {
-                    actions.push(Action::Coup(opponent_idx));
+                    actions.push(
+                        Action::Coup(CoupAction {
+                            coup_player_idx: game.current_player_idx,
+                            couped_player_idx: opponent_idx,
+                        })
+                    );
                 }
             } else {
-                actions.push(Action::Income);
-                actions.push(Action::ForeignAid);
-                actions.push(Action::CharacterAction(Duke, Tax));
+                actions.push(Action::Income(game.current_player_idx));
+                actions.push(Action::Propose(ProposedAction { proposer_player_idx: game.current_player_idx, action: ForeignAid }));
+                actions.push(Action::Propose(ProposedAction { proposer_player_idx: game.current_player_idx, action: ProposableAction::CharacterAction(Duke, Tax) }));
 
                 for card_idx in 0..game.players[game.current_player_idx].influence_cards.len() {
-                    actions.push(Action::CharacterAction(Ambassador, Exchange(card_idx)));
+                    actions.push(Action::Propose(ProposedAction { proposer_player_idx: game.current_player_idx, action: ProposableAction::CharacterAction(Ambassador, Exchange(card_idx)) }));
                 }
 
                 for opponent_idx in game.other_player_indexes(game.current_player_idx) {
                     if game.players[game.current_player_idx].money >= 7 {
-                        actions.push(Action::Coup(opponent_idx));
+                        actions.push(
+                            Action::Coup(CoupAction {
+                                coup_player_idx: game.current_player_idx,
+                                couped_player_idx: opponent_idx,
+                            })
+                        );
                     } else if game.players[game.current_player_idx].money >= 3 {
-                        actions.push(Action::CharacterAction(Assassin, Assassinate(opponent_idx)));
+                        actions.push(Action::Propose(ProposedAction { proposer_player_idx: game.current_player_idx, action: ProposableAction::CharacterAction(Assassin, Assassinate(opponent_idx)) }));
                     }
                     if game.players[opponent_idx].money > 0 {
-                        actions.push(Action::CharacterAction(Captain, Steal(opponent_idx)));
+                        actions.push(Action::Propose(ProposedAction { proposer_player_idx: game.current_player_idx, action: ProposableAction::CharacterAction(Captain, Steal(opponent_idx)) }));
                     }
                 }
             }
         }
 
-        fn add_proposal_reactions(game: &Coup, actions: &mut Vec<Action>, proposal: &Proposal){
-            match proposal.action {
-                Action::CharacterAction(character, character_action) => {
-                    match character_action {
-                        Assassinate(target_player) => {
-                            // can only block assassination of yourself
-                            if target_player == game.priority_player_idx.expect("this should be a priority player") {
-                                actions.push(Action::Block(Contessa));
-                            }
+        fn add_proposal_reactions(game: &Coup, actions: &mut Vec<Action>, proposal: &Proposal) {
+            let priority_player_idx = game.priority_player_idx.expect("this should be a priority player");
+            actions.push(Action::Pass(priority_player_idx));
+
+            match proposal.proposed_action.action {
+                ForeignAid => {
+                    actions.push(
+                        Action::Block(BlockAction {
+                            blocked_player_idx: proposal.proposed_action.proposer_player_idx,
+                            blocker_player_idx: priority_player_idx,
+                            blocker_claimed_character: Duke,
+                        })
+                    );
+                }
+                ProposableAction::CharacterAction(character, _) => {}
+            }
+
+            if let ProposableAction::CharacterAction(character, _) = proposal.proposed_action.action {
+                actions.push(
+                    Action::Challenge(ChallengeAction {
+                        challenger_player_idx: priority_player_idx,
+                        challenged_player_idx: proposal.proposed_action.proposer_player_idx,
+                        challenged_claimed_character: character,
+                    })
+                );
+            }
+        }
+
+        fn handle_challenge(game: &Coup, actions: &mut Vec<Action>, challenge: &Challenge) {
+            if let Some(challenge_response) = &challenge.response {
+                match challenge_response {
+                    ChallengeResponses::Reveal(reveal) => {
+                        match &reveal.response {
+                            RevealResponses::Lose(lose) => {}
                         }
-                        Steal(target_player) => {
-                            // can only block stealing of yourself
-                            if target_player == game.priority_player_idx.expect("this should be a priority player") {
-                                actions.push(Action::Block(Captain));
-                                actions.push(Action::Block(Ambassador));
-                            }
-                        }
-                        _ => {}
                     }
-                    actions.push(Action::Challenge(character));
+                    ChallengeResponses::Lose(lose) => {}
                 }
-                _ => {}
-            }
-            actions.push(Action::Pass);
-        }
+            } else {
+                // challenged player needs to prove themselves or not
 
-        fn handle_lose(game: &Coup, actions: &mut Vec<Action>, lose: &Lose){
-            // optionally, the player can lose the challenge and lose an influence card
-            for card_idx in 0..game.players[lose.loser_player_idx].influence_cards.len() {
-                actions.push(Action::Lose(card_idx));
-            }
-        }
-
-        fn handle_challenge(game: &Coup, actions: &mut Vec<Action>, challenge: &Challenge){
-            match &challenge.response {
-                ChallengeResponses::Reveal(reveal) => {
-                    match &reveal.response {
-                        RevealResponses::Lose(lose) => handle_lose(&game, actions, lose)
-                    }
+                // player may lose one of their cards as a result of not having proof (or if they
+                // just want to.
+                for card_idx in 0..game.players[challenge.challenge_action.challenged_player_idx].influence_cards.len() {
+                    actions.push(Action::Prove(ProveAction {
+                        prover_player_idx: challenge.challenge_action.challenged_player_idx,
+                        challenger_player_idx: challenge.challenge_action.challenger_player_idx,
+                        action: Prove::Lose(card_idx),
+                        challenge: challenge.challenge_action.clone(),
+                    }));
                 }
-                ChallengeResponses::Lose(lose) => handle_lose(&game, actions, lose)
+
+                let character_card_idx = {
+                    game
+                        .players[challenge.challenge_action.challenged_player_idx]
+                        .influence_cards
+                        .iter()
+                        // not revealed and is the claimed character
+                        .position(|e| e.1 == false && e.0 == challenge.challenge_action.challenged_claimed_character)
+                };
+
+                // player has the nuts, they can prove and win
+                if let Some(character_card_idx) = character_card_idx {
+                    actions.push(Action::Prove(ProveAction {
+                        prover_player_idx: challenge.challenge_action.challenged_player_idx,
+                        challenger_player_idx: challenge.challenge_action.challenger_player_idx,
+                        action: Prove::Win(character_card_idx),
+                        challenge: challenge.challenge_action.clone(),
+                    }));
+                }
             }
         }
 
-
+        // structure of a turn
         match &self.proposal {
-            None => {add_proposal_actions(&self, &mut actions);}
+            None => {
+                // no proposal set, player must take a proposal action
+                add_proposal_actions(&self, &mut actions);
+            }
             Some(proposal) => {
                 match &proposal.response {
                     None => {
+                        // a proposal has been made, that can be responded to, all players have a
+                        // chance to respond, they each get priority in turn
                         add_proposal_reactions(&self, &mut actions, proposal);
                     }
                     Some(proposal_response) => {
+                        // a proposal has been met with a response (block or challenge)
+                        // the proposing player must respond
                         match proposal_response {
                             ProposalResponses::Block(block_response) => {
+                                // if the proposal was blocked, the player may relent and lose their
+                                // benefits, or they can challenge the blocker's validity
                                 match &block_response.response {
-                                    None => {} // relent and get nothing
+                                    None => {
+                                        // relent and get nothing
+                                        actions.push(Action::Relent(proposal.proposed_action.proposer_player_idx));
+                                    }
                                     Some(block_response) => {
+                                        // challenge the blocker
                                         match block_response {
                                             BlockResponses::Challenge(challenge) => {
                                                 handle_challenge(&self, &mut actions, challenge)
@@ -274,14 +367,138 @@ impl Coup {
         actions
     }
 
-    fn apply_action(&self, action: &Action) -> Result<Coup, CoupError> {
+    fn apply_action(&self, action: Action) -> Result<Coup, CoupError> {
         let mut game = self.clone();
+
+        match action {
+            Action::Relent(_) => {
+                game.go_next_turn();
+            }
+            Action::Income(player_idx) => {
+                game.players[player_idx].money += 1;
+                game.go_next_turn();
+            }
+            Action::Pass(_) => {
+                if let Some(num_remaining_passers) = game.num_remaining_passers {
+                    game.num_remaining_passers = Some(num_remaining_passers - 1);
+                } else {
+                    panic!("num_remaining_passers should be Some()");
+                }
+                game.go_next_prio();
+            }
+            Action::Coup(coup_action) => {
+                game.loser = Some(Loser {
+                    loser_player_idx: coup_action.couped_player_idx,
+                    loser_lost_challenge: None,
+                });
+            }
+            Action::Propose(proposal) => {
+                game.proposal = Some(Proposal {
+                    proposed_action: proposal,
+                    response: None,
+                });
+
+                // set up passer counter
+                game.num_remaining_passers = Some(game.players.len() - 1);
+
+                game.go_next_prio();
+            }
+            Action::Challenge(challenge_action) => {
+                game.proposal.as_mut().unwrap().response = Some(
+                    ProposalResponses::Challenge(Challenge {
+                        challenge_action,
+                        response: None,
+                    })
+                );
+
+                // pass prio back to proposer
+                game.priority_player_idx = Some(game.proposal.as_ref().unwrap().proposed_action.proposer_player_idx);
+            }
+            Action::Block(block_action) => {
+                game.proposal.as_mut().unwrap().response = Some(
+                    ProposalResponses::Block(Block {
+                        block_action,
+                        response: None,
+                    })
+                );
+
+                // pass prio back to proposer
+                game.priority_player_idx = Some(game.proposal.as_ref().unwrap().proposed_action.proposer_player_idx);
+            }
+            Action::Prove(prove_action) => {
+                match prove_action.action {
+                    Prove::Win(card_idx) => {
+                        // winner replaces their card first
+                        game.replace_influence_card(prove_action.prover_player_idx, card_idx);
+
+                        // then the challenger must choose to lose an influence
+                        game.loser = Some(Loser {
+                            loser_player_idx: prove_action.challenger_player_idx,
+                            loser_lost_challenge: Some(prove_action.challenge),
+                        });
+                    }
+                    Prove::Lose(card_idx) => {
+                        game.lose_influence_card(prove_action.prover_player_idx, card_idx);
+
+                        game.loser = None;
+
+                        // after a proof loss, the game proceeds immediately to the next player
+                        game.go_next_turn();
+                    }
+                }
+            }
+            Action::Lose(lose_action) => {
+                // player lost this influence card
+                game.lose_influence_card(lose_action.loser_player_idx, lose_action.discarded_influence_card_idx);
+                game.loser = None;
+            }
+        }
+
+        if let Some(num_remaining_passers) = game.num_remaining_passers {
+            if num_remaining_passers == 0 {
+                // proposal has passed
+                if let Some(proposal) = &game.proposal {
+                    match proposal.proposed_action.action {
+                        ForeignAid => {
+                            let player_idx = proposal.proposed_action.proposer_player_idx;
+                            game.players[player_idx].money += 2;
+                        }
+                        ProposableAction::CharacterAction(_, _) => {}
+                    }
+                } else {
+                    panic!("proposal should be Some()")
+                }
+
+                game.num_remaining_passers = None;
+                game.go_next_turn();
+            }
+        }
 
         Ok(game)
     }
 
-    fn next_actor(&self) -> usize {
-        let idx = match self.priority_player_idx {
+    fn is_terminal(&self) -> bool {
+        return self.players
+            .iter()
+            .filter(|player| {
+                // if the player has at least one unrevealed card they're still in the game
+                player.influence_cards.iter().any(|card| card.1 == false)
+            }).count() == 1;
+    }
+
+    fn next_living_player(&self) -> usize {
+        let mut idx = self.current_player_idx;
+
+        idx = (idx + 1) % self.players.len();
+        while self.is_player_dead(idx) {
+            idx = (idx + 1) % self.players.len();
+        }
+
+        idx
+    }
+
+    fn next_prio_player_idx(&self) -> usize {
+        let mut idx = match self.priority_player_idx {
             None => {
                 self.current_player_idx
             }
@@ -290,7 +507,12 @@ impl Coup {
             }
         };
 
-        (idx + 1) % self.players.len()
+        idx = (idx + 1) % self.players.len();
+        while self.is_player_dead(idx) {
+            idx = (idx + 1) % self.players.len();
+        }
+
+        idx
     }
 }
 
@@ -320,44 +542,21 @@ enum CharacterAction {
     Exchange(usize),
 }
 
-#[derive(Copy, Clone, Debug)]
-enum Action {
-    Income,
-    ForeignAid,
-    Coup(usize), // coup a player by idx
-
-    // a player claims to be a character and take a character action
-    CharacterAction(Character, CharacterAction),
-
-    // a player challenges that another player has this character
-    Challenge(Character),
-
-    // player must claim to be a character to block
-    Block(Character),
-
-    Pass,
-    // player does not issue a challenge
-    Lose(usize),
-    // if the player loses a challenge, they remove this influence card
-    Reveal(usize), // if the player reveals, they win the challenge
-}
-
 fn main() {
     let mut coup = Coup::new(4);
     let mut rng = thread_rng();
 
-    for i in 0..50 {
-        let actions = coup.gen_actions();
-        let random_action = actions.choose(&mut rng);
-        match random_action {
-            None => {
-                println!("No actions generated");
-                break;
-            }
-            Some(action) => {
-                println!("{} | {:?} -> ${} {:?} | {:?}", coup.current_player_idx, coup.priority_player_idx, coup.active_player().money, coup.active_player().influence_cards, random_action);
-                coup = coup.apply_action(action).unwrap();
-            }
+    for i in 0..500 {
+        let mut actions = coup.gen_actions();
+        let random_index = rng.gen_range(0..actions.len());
+        let random_action = actions.remove(random_index);
+
+        println!("{} | {:?} -> ${} {:?} | {:?}", coup.current_player_idx, coup.priority_player_idx, coup.active_player().money, coup.active_player().influence_cards, random_action);
+        coup = coup.apply_action(random_action).unwrap();
+
+        if coup.is_terminal() {
+            println!("game over");
+            break;
         }
     }
 }
@@ -369,16 +568,16 @@ mod tests {
     #[test]
     fn next_actor() {
         let mut coup = Coup::new(4);
-        assert_eq!(coup.next_actor(), 1);
+        assert_eq!(coup.next_prio_player_idx(), 1);
 
         coup.current_player_idx = 1;
-        assert_eq!(coup.next_actor(), 2);
+        assert_eq!(coup.next_prio_player_idx(), 2);
 
         coup.priority_player_idx = Some(2);
-        assert_eq!(coup.next_actor(), 3);
+        assert_eq!(coup.next_prio_player_idx(), 3);
 
         coup.current_player_idx = 3;
-        assert_eq!(coup.next_actor(), 3);
+        assert_eq!(coup.next_prio_player_idx(), 3);
     }
 
     #[test]
