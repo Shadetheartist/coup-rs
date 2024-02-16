@@ -17,7 +17,7 @@ enum State {
     AwaitingChallengedBlockResponse(usize, usize),
     // challenger
     AwaitingChallengedProposalResponse(usize),
-    // who's going to lose influence, and if to end the turn after
+    // who's going to lose influence, and if the turn should end afterward
     AwaitingLoseInfluence(usize, bool),
 
     ResolveProposal,
@@ -33,11 +33,11 @@ enum Character {
 }
 
 static CHARACTER_VARIANTS: [Character; 5] = [
-    Character::Duke,
-    Character::Assassin,
-    Character::Captain,
-    Character::Ambassador,
-    Character::Contessa,
+    Duke,
+    Assassin,
+    Captain,
+    Ambassador,
+    Contessa,
 ];
 
 
@@ -48,9 +48,7 @@ struct Player {
 }
 
 #[derive(Debug)]
-enum CoupError {
-
-}
+enum CoupError {}
 
 
 #[derive(Clone)]
@@ -106,7 +104,7 @@ impl Coup {
     fn other_player_indexes(&self, exclude_idx: usize) -> Vec<usize> {
         (1..self.players.len())
             .map(|n| (exclude_idx + n) % self.players.len())
-            .filter(|player_idx| self.is_player_dead(*player_idx) == false)
+            .filter(|player_idx| !self.is_player_dead(*player_idx))
             .collect()
     }
 
@@ -130,7 +128,7 @@ impl Coup {
 
     fn replace_influence_card(&mut self, player_idx: usize, card_idx: usize) {
         let card = self.players[player_idx].influence_cards.remove(card_idx);
-        if card.1 == true {
+        if card.1 {
             panic!("shouldn't be able to lose/replace a revealed/lost influence card");
         }
 
@@ -148,7 +146,7 @@ impl Coup {
     }
 
     fn is_player_dead(&self, player_idx: usize) -> bool {
-        self.players[player_idx].influence_cards.iter().filter(|x| x.1 == false).count() == 0
+        self.players[player_idx].influence_cards.iter().filter(|x| !x.1).count() == 0
     }
 
     fn player_active_influence_cards(&self, player_idx: usize) -> Vec<usize> {
@@ -156,10 +154,10 @@ impl Coup {
             .iter()
             .enumerate()
             .filter_map(|(idx, card)| {
-                if card.1 == false {
-                    Some(idx)
-                } else {
+                if card.1 {
                     None
+                } else {
+                    Some(idx)
                 }
             }).collect()
     }
@@ -170,7 +168,7 @@ impl Coup {
             .players[player_idx]
             .influence_cards
             .iter()
-            .position(|e| e.1 == false && e.0 == character)
+            .position(|e| !e.1 && e.0 == character)
     }
 
     fn actions(&self) -> Vec<Action> {
@@ -241,11 +239,9 @@ impl Coup {
                                         }
                                         Action::Exchange(_, _) => {
                                             actions.push(Action::Challenge(priority_player_idx));
-
                                         }
                                         _ => {}
                                     }
-
                                 }
                                 None => unreachable!("proposal must be defined at this point")
                             }
@@ -323,12 +319,8 @@ impl Coup {
             Action::Propose(_, proposed_action) => {
 
                 // pay for assassinate proposal
-                match *proposed_action {
-                    Action::Assassinate(_, _) => {
-                        game.players[game.current_player_idx].money -= 3;
-                    }
-
-                    _ => {}
+                if let Action::Assassinate(_, _) = *proposed_action {
+                    game.players[game.current_player_idx].money -= 3;
                 }
 
                 game.proposal = Some(proposed_action.deref().clone());
@@ -466,7 +458,7 @@ impl Coup {
             .iter()
             .filter(|player| {
                 // if the player has at least one unrevealed card they're still in the game
-                player.influence_cards.iter().any(|card| card.1 == false)
+                player.influence_cards.iter().any(|card| !card.1)
             }).count() == 1;
     }
 
