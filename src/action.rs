@@ -1,5 +1,5 @@
 use std::fmt::{Debug, Formatter};
-use crate::{Character, CharacterAction};
+use crate::{Character};
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum Action {

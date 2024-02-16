@@ -1,5 +1,4 @@
 mod action;
-mod coup;
 
 use std::ops::Deref;
 use rand::seq::SliceRandom;
@@ -50,7 +49,7 @@ struct Player {
 
 #[derive(Debug)]
 enum CoupError {
-    InvalidAction(Action),
+
 }
 
 
@@ -77,7 +76,7 @@ impl Coup {
         let mut rng = thread_rng();
         deck.shuffle(&mut rng);
 
-        let mut players = (0..num_players).map(|_| Player {
+        let players = (0..num_players).map(|_| Player {
             money: 2,
             influence_cards: vec![(deck.remove(0), false), (deck.remove(0), false)],
         }).collect();
@@ -221,14 +220,29 @@ impl Coup {
                                     // notably not including blocks here since they're not possible at
                                     // this state of the game
                                     match proposal {
-                                        Action::Tax(_) |
-                                        Action::Assassinate(_, _) |
-                                        Action::Steal(_, _) |
+                                        Action::Tax(_) => {
+                                            actions.push(Action::Challenge(priority_player_idx));
+                                        }
+                                        Action::Assassinate(_, target_player_idx) => {
+                                            actions.push(Action::Challenge(priority_player_idx));
+                                            if *target_player_idx == self.priority_player_idx.unwrap() {
+                                                actions.push(Action::Block(priority_player_idx, Contessa));
+                                            }
+                                        }
+                                        Action::Steal(_, target_player_idx) => {
+                                            actions.push(Action::Challenge(priority_player_idx));
+                                            if *target_player_idx == self.priority_player_idx.unwrap() {
+                                                actions.push(Action::Block(priority_player_idx, Ambassador));
+                                                actions.push(Action::Block(priority_player_idx, Captain));
+                                            }
+                                        }
                                         Action::Exchange(_, _) => {
                                             actions.push(Action::Challenge(priority_player_idx));
+
                                         }
                                         _ => {}
                                     }
+
                                 }
                                 None => unreachable!("proposal must be defined at this point")
                             }
@@ -304,6 +318,18 @@ impl Coup {
 
         match action {
             Action::Propose(_, proposed_action) => {
+
+                // pay for proposal
+                match *proposed_action {
+                    Action::Assassinate(_, _) => {
+                        game.players[game.current_player_idx].money -= 3;
+                    }
+                    Action::Coup(_, _) => {
+                        game.players[game.current_player_idx].money -= 7;
+                    }
+                    _ => {}
+                }
+
                 game.proposal = Some(proposed_action.deref().clone());
                 game.state = State::AwaitingProposalResponse(game.other_player_indexes(self.current_player_idx).len());
                 game.priority_player_idx = Some(game.next_prio_player_idx());
@@ -472,37 +498,11 @@ impl Coup {
     }
 }
 
-struct InformationSetOpponent {
-    money: u8,
-    num_influence_cards: u8,
-}
-
-// the game of coup from the perspective of a player
-struct CoupInformationSet {
-    current_player_idx: usize,
-    num_deck_cards: usize,
-    num_player_influence_cards_and_money: Vec<InformationSetOpponent>,
-    // indexed by player (cards, money)
-    influence_cards: Vec<Character>,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum CharacterAction {
-    Tax,
-    // Assassinate a player by idx
-    Assassinate(usize),
-    // Steal from a player by idx
-    Steal(usize),
-
-    // Exchange an influence card by idx (this is the idx of the card in the current player's hand)
-    Exchange(usize),
-}
-
 fn main() {
     let mut coup = Coup::new(4);
     let mut rng = thread_rng();
 
-    for i in 0..100 {
+    for _ in 0..100 {
         let mut actions = coup.actions();
 
         if actions.is_empty() {
@@ -526,8 +526,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use crate::action::{Action};
-    use crate::action::Action::{Income, Lose, Pass, Assassinate, Resolve, Challenge, Reveal};
-    use crate::Character::{Assassin, Duke};
+    use crate::action::Action::{Income, Lose, Pass, Assassinate, Resolve, Challenge, Reveal, Steal, Block};
+    use crate::Character::{Ambassador, Assassin, Captain, Duke};
     use crate::{Coup};
 
     fn find_action(game: &Coup, f: Box<dyn Fn(&Action) -> bool>) -> Action {
@@ -611,9 +611,14 @@ mod tests {
         coup = try_action(coup, Box::new(|a| *a == Income(1)));
         coup = try_action(coup, Box::new(|a| *a == Income(2)));
 
+        assert_eq!(coup.players[0].money, 3);
+
         // assassinate
         let assassinate_proposal = Action::Propose(0, Box::new(Assassinate(0, 1)));
         coup = try_action(coup, Box::new(move |a| *a == assassinate_proposal));
+
+        // should instantly be out of money
+        assert_eq!(coup.players[0].money, 0);
 
         coup = try_action(coup, Box::new(|a| *a == Pass(1)));
         coup = try_action(coup, Box::new(|a| *a == Pass(2)));
@@ -624,6 +629,47 @@ mod tests {
 
         // next action should be player 1 choice
         find_action(&coup, Box::new(|a| *a == Income(1)));
+    }
+
+    #[test]
+    fn test_steal_block() {
+        let mut coup = Coup::new(3);
+
+        // give p0 a captain
+        coup.players[0].influence_cards[0] = (Captain, false);
+        coup.players[0].influence_cards[1] = (Duke, false);
+
+        // give p2 an ambassador
+        coup.players[2].influence_cards[0] = (Ambassador, false);
+        coup.players[2].influence_cards[1] = (Duke, false);
+
+        // steal from p2
+        let proposal = Action::Propose(0, Box::new(Steal(0, 2)));
+        coup = try_action(coup, Box::new(move |a| *a == proposal));
+
+        // p1 can't block - it's not targeting them
+        coup = try_action(coup, Box::new(|a| *a == Pass(1)));
+
+        // p2 blocks
+        println!("{:?}", coup.actions());
+        coup = try_action(coup, Box::new(|a| *a == Block(2, Ambassador)));
+
+        // p0 challenges
+        coup = try_action(coup, Box::new(|a| *a == Challenge(0)));
+
+        // p2 reveals & wins
+        coup = try_action(coup, Box::new(|a| *a == Reveal(2, 0)));
+
+        // p0 loses a card
+        coup = try_action(coup, Box::new(|a| *a == Lose(0, 0, false)));
+
+        // next action should be player 1 choice
+        find_action(&coup, Box::new(|a| *a == Income(1)));
+
+        // players should still have the same amount of money
+        assert_eq!(coup.players[0].money, 2);
+        assert_eq!(coup.players[2].money, 2);
+
     }
 
     #[test]
