@@ -24,7 +24,7 @@ enum State {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum Character {
+pub enum Character {
     Duke,
     Assassin,
     Captain,
@@ -156,7 +156,7 @@ impl Coup {
         self.players[player_idx].influence_cards.iter().filter(|x| !x.1).count() == 0
     }
 
-    fn player_active_influence_cards(&self, player_idx: usize) -> Vec<usize> {
+    fn player_active_influence_cards(&self, player_idx: usize) -> impl Iterator<Item=usize> + '_ {
         self.players[player_idx].influence_cards
             .iter()
             .enumerate()
@@ -166,7 +166,7 @@ impl Coup {
                 } else {
                     Some(idx)
                 }
-            }).collect()
+            })
     }
 
     fn find_player_active_character(&self, player_idx: usize, character: Character) -> Option<usize> {
@@ -179,7 +179,7 @@ impl Coup {
     }
 
     pub fn actions(&self) -> Vec<Action> {
-        let mut actions = vec![];
+        let mut actions = Vec::with_capacity(self.players.len() * 2);
 
         match self.state {
             State::AwaitingProposal => {
@@ -530,7 +530,8 @@ impl Coup {
 
 #[cfg(test)]
 mod tests {
-    use rand::thread_rng;
+    use criterion::black_box;
+    use rand::{Rng, thread_rng};
     use crate::action::{Action};
     use crate::action::Action::{Income, Lose, Pass, Assassinate, Resolve, Challenge, Reveal, Steal, Block};
     use crate::Character::{Ambassador, Assassin, Captain, Duke};
@@ -559,6 +560,54 @@ mod tests {
                 panic!("failed to apply action: {:?}", err)
             }
         }
+    }
+
+    #[test]
+    fn complete_game() {
+        let mut rng = thread_rng();
+        let mut coup = black_box(Coup::new(4));
+        for _ in 0..1000 {
+            let mut actions = coup.actions();
+            if actions.is_empty() {
+                panic!("no actions generated during unfinished game")
+            }
+
+            let random_index = rng.gen_range(0..actions.len());
+            let random_action = actions.remove(random_index);
+
+            coup = coup.apply_action(random_action, &mut rng).unwrap();
+
+            if let Some(_) = coup.winner() {
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn average_actions() {
+        // this function shows what the best pre-set capacity is for the actions vec
+        let mut rng = thread_rng();
+        let mut num_actions: Vec<usize> = Vec::new();
+        for _ in 0..1000 {
+            let mut coup = black_box(Coup::new(4));
+            for _ in 0..1000 {
+                let mut actions = coup.actions();
+                num_actions.push(actions.len());
+                let random_index = rng.gen_range(0..actions.len());
+                let random_action = actions.remove(random_index);
+
+                coup = coup.apply_action(random_action, &mut rng).unwrap();
+
+                if let Some(_) = coup.winner() {
+                    break;
+                }
+            }
+        }
+
+        let sum = num_actions.iter().fold(0, |sum, &val| sum + val);
+        let greatest = num_actions.iter().fold(0, |sum, &val| if val > sum {val} else {sum});
+
+        println!("avg {} | greatest {greatest}",  sum / num_actions.len());
     }
 
     #[test]
