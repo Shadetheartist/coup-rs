@@ -487,7 +487,7 @@ impl Coup {
                 .enumerate()
                 .find(|(_, player)| {
                     // return true if the player has any face down cards
-                    player.influence_cards.iter().any(|card| card.1)
+                    player.influence_cards.iter().any(|card| !card.1)
                 }).unwrap().0)
         } else {
             None
