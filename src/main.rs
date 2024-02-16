@@ -137,7 +137,13 @@ impl Coup {
         let mut rng = thread_rng();
         self.deck.shuffle(&mut rng);
 
-        self.players[player_idx].influence_cards.push((self.deck.remove(0), false));
+        // put the card back at the right position
+        let card = self.deck.remove(0);
+        if card_idx == 0 {
+            self.players[player_idx].influence_cards.insert(0, (card, false));
+        } else {
+            self.players[player_idx].influence_cards.push((card, false));
+        }
     }
 
     fn lose_influence_card(&mut self, player_idx: usize, card_idx: usize) {
@@ -431,11 +437,25 @@ impl Coup {
                                 game.go_next_turn();
                             }
                             Action::Assassinate(_, target_player_idx) => {
-                                game.state = State::AwaitingLoseInfluence(*target_player_idx, true);
+                                // target player could already be dead from losing a challenge
+                                if game.is_player_dead(*target_player_idx) {
+                                    game.go_next_turn();
+                                } else {
+                                    game.state = State::AwaitingLoseInfluence(*target_player_idx, true);
+                                }
                             }
                             Action::Steal(_, target_player_idx) => {
-                                game.players[game.current_player_idx].money += 2;
-                                game.players[*target_player_idx].money -= 2;
+                                let n = {
+                                    if game.players[*target_player_idx].money >= 2 {
+                                        2
+                                    } else if game.players[*target_player_idx].money == 1 {
+                                        1
+                                    } else {
+                                        panic!("you shouldn't be able to steal from someone with $0")
+                                    }
+                                };
+                                game.players[game.current_player_idx].money += n;
+                                game.players[*target_player_idx].money -= n;
                                 game.go_next_turn();
                             }
                             Action::Exchange(_, card_idx) => {
@@ -453,13 +473,25 @@ impl Coup {
         Ok(game)
     }
 
-    fn is_terminal(&self) -> bool {
-        return self.players
+    fn winner(&self) -> Option<usize> {
+        let game_over = self.players
             .iter()
             .filter(|player| {
                 // if the player has at least one unrevealed card they're still in the game
                 player.influence_cards.iter().any(|card| !card.1)
             }).count() == 1;
+
+        if game_over {
+            Some(self.players
+                .iter()
+                .enumerate()
+                .find(|(_, player)| {
+                    // return true if the player has any face down cards
+                    player.influence_cards.iter().any(|card| card.1)
+                }).unwrap().0)
+        } else {
+            None
+        }
     }
 
     fn next_living_player(&self) -> usize {
@@ -493,26 +525,28 @@ impl Coup {
 }
 
 fn main() {
-    let mut coup = Coup::new(4);
     let mut rng = thread_rng();
 
     for _ in 0..100 {
-        let mut actions = coup.actions();
+        let mut coup = Coup::new(4);
+        for _ in 0..100 {
+            let mut actions = coup.actions();
 
-        if actions.is_empty() {
-            println!("no actions");
-            coup.actions();
-            break;
-        }
+            if actions.is_empty() {
+                println!("no actions");
+                coup.actions();
+                break;
+            }
 
-        let random_index = rng.gen_range(0..actions.len());
-        let random_action = actions.remove(random_index);
+            let random_index = rng.gen_range(0..actions.len());
+            let random_action = actions.remove(random_index);
 
-        coup = coup.apply_action(random_action).unwrap();
+            coup = coup.apply_action(random_action).unwrap();
 
-        if coup.is_terminal() {
-            println!("game over");
-            break;
+            if let Some(winner_idx) = coup.winner() {
+                println!("game over, player {winner_idx} wins");
+                break;
+            }
         }
     }
 }
