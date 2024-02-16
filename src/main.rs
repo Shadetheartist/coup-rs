@@ -179,10 +179,12 @@ impl Coup {
         match self.state {
             State::AwaitingProposal => {
                 if self.players[self.current_player_idx].money >= 10 {
+                    // forced coup at $10+
                     for opponent_idx in self.other_player_indexes(self.current_player_idx) {
-                        actions.push(Action::Propose(self.current_player_idx, Box::new(Action::Coup(self.current_player_idx, opponent_idx))));
+                        actions.push(Action::Coup(self.current_player_idx, opponent_idx));
                     }
                 } else {
+                    // income-ing is not a proposal - it just happens
                     actions.push(Action::Income(self.current_player_idx));
                     actions.push(Action::Propose(self.current_player_idx, Box::new(Action::ForeignAid(self.current_player_idx))));
                     actions.push(Action::Propose(self.current_player_idx, Box::new(Action::Tax(self.current_player_idx))));
@@ -193,7 +195,8 @@ impl Coup {
 
                     for opponent_idx in self.other_player_indexes(self.current_player_idx) {
                         if self.players[self.current_player_idx].money >= 7 {
-                            actions.push(Action::Propose(self.current_player_idx, Box::new(Action::Coup(self.current_player_idx, opponent_idx))));
+                            // coup-ing is not a proposal - it just happens
+                            actions.push(Action::Coup(self.current_player_idx, opponent_idx));
                         } else if self.players[self.current_player_idx].money >= 3 {
                             actions.push(Action::Propose(self.current_player_idx, Box::new(Action::Assassinate(self.current_player_idx, opponent_idx))));
                         }
@@ -314,19 +317,17 @@ impl Coup {
 
     fn apply_action(&self, action: Action) -> Result<Coup, CoupError> {
         let mut game = self.clone();
-        println!("{} | {:?} -> ${} {:?} | {:?}", self.current_player_idx, self.priority_player_idx, self.active_player().money, self.active_player().influence_cards, action);
+        println!("T{}: {} | {:?} -> ${} {:?} | {:?}", self.turn, self.current_player_idx, self.priority_player_idx, self.active_player().money, self.active_player().influence_cards, action);
 
         match action {
             Action::Propose(_, proposed_action) => {
 
-                // pay for proposal
+                // pay for assassinate proposal
                 match *proposed_action {
                     Action::Assassinate(_, _) => {
                         game.players[game.current_player_idx].money -= 3;
                     }
-                    Action::Coup(_, _) => {
-                        game.players[game.current_player_idx].money -= 7;
-                    }
+
                     _ => {}
                 }
 
@@ -337,6 +338,10 @@ impl Coup {
             Action::Income(player_idx) => {
                 game.players[player_idx].money += 1;
                 game.go_next_turn();
+            }
+            Action::Coup(_, target_player_idx) => {
+                game.players[game.current_player_idx].money -= 7;
+                game.state = State::AwaitingLoseInfluence(target_player_idx, true);
             }
             Action::Block(_, character) => {
                 let blocking_player_idx = game.priority_player_idx.expect("priority should exist and the acting player should have priority");
@@ -434,9 +439,6 @@ impl Coup {
                                 game.go_next_turn();
                             }
                             Action::Assassinate(_, target_player_idx) => {
-                                game.state = State::AwaitingLoseInfluence(*target_player_idx, true);
-                            }
-                            Action::Coup(_, target_player_idx) => {
                                 game.state = State::AwaitingLoseInfluence(*target_player_idx, true);
                             }
                             Action::Steal(_, target_player_idx) => {
@@ -630,6 +632,36 @@ mod tests {
     }
 
     #[test]
+    fn test_steal() {
+        let mut coup = Coup::new(3);
+
+        // give p0 a captain
+        coup.players[0].influence_cards[0] = (Captain, false);
+        coup.players[0].influence_cards[1] = (Duke, false);
+
+        // give p2 an ambassador
+        coup.players[2].influence_cards[0] = (Ambassador, false);
+        coup.players[2].influence_cards[1] = (Duke, false);
+
+        // steal from p2
+        let proposal = Action::Propose(0, Box::new(Steal(0, 2)));
+        coup = try_action(coup, Box::new(move |a| *a == proposal));
+
+        // p1 can't block - it's not targeting them
+        coup = try_action(coup, Box::new(|a| *a == Pass(1)));
+        coup = try_action(coup, Box::new(|a| *a == Pass(2)));
+
+        coup = try_action(coup, Box::new(|a| *a == Resolve(0)));
+
+        // next action should be player 1 choice
+        find_action(&coup, Box::new(|a| *a == Income(1)));
+
+        // players should still have the same amount of money
+        assert_eq!(coup.players[0].money, 4);
+        assert_eq!(coup.players[2].money, 0);
+    }
+
+    #[test]
     fn test_steal_block() {
         let mut coup = Coup::new(3);
 
@@ -657,7 +689,6 @@ mod tests {
         // p2 reveals & wins
         coup = try_action(coup, Box::new(|a| *a == Reveal(2, 0)));
 
-        println!("{:?}", coup.actions());
         // p0 loses a card, and the game ends
         coup = try_action(coup, Box::new(|a| *a == Lose(0, 0, true)));
 
@@ -667,7 +698,30 @@ mod tests {
         // players should still have the same amount of money
         assert_eq!(coup.players[0].money, 2);
         assert_eq!(coup.players[2].money, 2);
+    }
 
+    #[test]
+    fn test_coup() {
+        let mut coup = Coup::new(3);
+
+        // give p0 $10
+        coup.players[0].money = 10;
+
+        // coup should be forced at $10+ (coup p1 and p2)
+        assert_eq!(coup.actions().len(), 2);
+
+        // coup from p1
+        coup = try_action(coup, Box::new(|a| *a == Action::Coup(0, 1)));
+
+        println!("{:?}", coup.actions());
+
+        coup = try_action(coup, Box::new(|a| *a == Lose(1, 0, true)));
+
+        // next action should be player 1 choice
+        find_action(&coup, Box::new(|a| *a == Income(1)));
+
+        // players should still have the same amount of money
+        assert_eq!(coup.players[0].money, 3);
     }
 
     #[test]
