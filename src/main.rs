@@ -374,7 +374,7 @@ impl Coup {
                         game.priority_player_idx = Some(challenger_player_idx);
                     }
                     State::AwaitingChallengedProposalResponse(challenger_player_idx) => {
-                        game.state = State::AwaitingLoseInfluence(challenger_player_idx, true);
+                        game.state = State::AwaitingLoseInfluence(challenger_player_idx, false);
                         game.priority_player_idx = Some(challenger_player_idx);
                     }
                     _ => unreachable!("can only reveal if current state is awaiting block or challenge response")
@@ -526,10 +526,9 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use crate::action::{Action};
-    use crate::action::Action::{Income, Lose, Pass};
+    use crate::action::Action::{Income, Lose, Pass, Assassinate, Resolve, Challenge, Reveal};
     use crate::Character::{Assassin, Duke};
-    use crate::CharacterAction::Assassinate;
-    use crate::{Character, Coup};
+    use crate::{Coup};
 
     fn find_action(game: &Coup, f: Box<dyn Fn(&Action) -> bool>) -> Action {
         let actions = game.actions();
@@ -540,6 +539,17 @@ mod tests {
             }
             Some(action) => {
                 action.clone()
+            }
+        }
+    }
+
+    fn try_action(game: Coup, f: Box<dyn Fn(&Action) -> bool>) -> Coup {
+        match game.apply_action(find_action(&game, f)) {
+            Ok(game) => {
+                game
+            }
+            Err(err) => {
+                panic!("failed to apply action: {:?}", err)
             }
         }
     }
@@ -556,58 +566,33 @@ mod tests {
         coup.players[1].influence_cards[1] = (Duke, false);
 
         // income round
-        coup = coup.apply_action(find_action(&coup, Box::new(|a| *a == Income(0)))).unwrap();
-        coup = coup.apply_action(find_action(&coup, Box::new(|a| *a == Income(1)))).unwrap();
-        coup = coup.apply_action(find_action(&coup, Box::new(|a| *a == Income(2)))).unwrap();
+        coup = try_action(coup, Box::new(|a| *a == Income(0)));
+        coup = try_action(coup, Box::new(|a| *a == Income(1)));
+        coup = try_action(coup, Box::new(|a| *a == Income(2)));
 
         // assassinate
-        coup = coup.apply_action(find_action(&coup, Box::new(|a| *a == Action::Propose(
-            ProposedAction {
-                proposer_player_idx: 0,
-                action: ProposableAction::CharacterAction(Assassin, Assassinate(1)),
-            }
-        )))).unwrap();
+        let assassinate_proposal = Action::Propose(0, Box::new(Assassinate(0, 1)));
+        coup = try_action(coup, Box::new(move |a| *a == assassinate_proposal));
 
-        let challenge = ChallengeAction {
-            challenger_player_idx: 1,
-            challenged_player_idx: 0,
-            challenged_claimed_character: Character::Assassin,
-        };
+        // p1 challenges
+        coup = try_action(coup, Box::new(|a| *a == Challenge(1)));
 
-        // p1 challenges assassination
-        {
-            let challenge = challenge.clone();
-            coup = coup.apply_action(find_action(&coup, Box::new(move |a| *a == Action::Challenge(challenge.clone())))).unwrap();
-        }
+        // p0 wins challenge
+        coup = try_action(coup, Box::new(|a| *a == Reveal(0, 0)));
 
-        // p0 wins challenge via proof
-        {
-            let challenge = challenge.clone();
-            coup = coup.apply_action(find_action(&coup, Box::new(move |a| *a == Action::Prove(ProveAction {
-                prover_player_idx: 0,
-                challenger_player_idx: 1,
-                action: Prove::Win(0),
-                challenge: challenge.clone(),
-            })))).unwrap();
-        }
-
-        // p1 loses challenge
-        {
-            println!("{:?}", coup.actions());
-            let challenge = challenge.clone();
-            coup = coup.apply_action(find_action(&coup, Box::new(move |a| *a == Action::Prove(ProveAction {
-                prover_player_idx: 0,
-                challenger_player_idx: 1,
-                action: Prove::Lose(0),
-                challenge: challenge.clone(),
-            })))).unwrap();
-        }
         println!("{:?}", coup.actions());
 
-        coup = coup.apply_action(find_action(&coup, Box::new(|a| *a == Lose(LoseAction {
-            loser_player_idx: 1,
-            discarded_influence_card_idx: 1,
-        })))).unwrap();
+        // p1 loses card
+        coup = try_action(coup, Box::new(|a| *a == Lose(1, 0, false)));
+
+        // p0 resolves
+        coup = try_action(coup, Box::new(|a| *a == Resolve(0)));
+
+        // p1 loses another card
+        coup = try_action(coup, Box::new(|a| *a == Lose(1, 1, true)));
+
+        // next action should be player 2 choice, p1 is dead
+        find_action(&coup, Box::new(|a| *a == Income(2)));
     }
 
     #[test]
@@ -622,25 +607,20 @@ mod tests {
         coup.players[1].influence_cards[1] = (Duke, false);
 
         // income round
-        coup = coup.apply_action(find_action(&coup, Box::new(|a| *a == Income(0)))).unwrap();
-        coup = coup.apply_action(find_action(&coup, Box::new(|a| *a == Income(1)))).unwrap();
-        coup = coup.apply_action(find_action(&coup, Box::new(|a| *a == Income(2)))).unwrap();
+        coup = try_action(coup, Box::new(|a| *a == Income(0)));
+        coup = try_action(coup, Box::new(|a| *a == Income(1)));
+        coup = try_action(coup, Box::new(|a| *a == Income(2)));
 
         // assassinate
-        coup = coup.apply_action(find_action(&coup, Box::new(|a| *a == Action::Propose(
-            ProposedAction {
-                proposer_player_idx: 0,
-                action: ProposableAction::CharacterAction(Assassin, Assassinate(1)),
-            }
-        )))).unwrap();
+        let assassinate_proposal = Action::Propose(0, Box::new(Assassinate(0, 1)));
+        coup = try_action(coup, Box::new(move |a| *a == assassinate_proposal));
 
-        coup = coup.apply_action(find_action(&coup, Box::new(|a| *a == Pass(1)))).unwrap();
-        coup = coup.apply_action(find_action(&coup, Box::new(|a| *a == Pass(2)))).unwrap();
+        coup = try_action(coup, Box::new(|a| *a == Pass(1)));
+        coup = try_action(coup, Box::new(|a| *a == Pass(2)));
 
-        coup = coup.apply_action(find_action(&coup, Box::new(|a| *a == Lose(LoseAction {
-            loser_player_idx: 1,
-            discarded_influence_card_idx: 0,
-        })))).unwrap();
+        coup = try_action(coup, Box::new(|a| *a == Resolve(0)));
+
+        coup = try_action(coup, Box::new(|a| *a == Lose(1, 0, true)));
 
         // next action should be player 1 choice
         find_action(&coup, Box::new(|a| *a == Income(1)));
