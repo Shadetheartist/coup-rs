@@ -1,6 +1,7 @@
 mod action;
+mod ai;
 
-use std::ops::Deref;
+use std::ops::{Deref, Range};
 use rand::seq::SliceRandom;
 use rand::{Rng, thread_rng};
 use crate::action::Action;
@@ -91,6 +92,27 @@ impl Coup {
             deck,
             players,
         }
+    }
+
+    // creates a clone of the game where things this player should not know have been randomized
+    pub fn determine<R: Rng + Sized>(&self, rng: &mut R, player_idx: usize) -> Coup{
+        let mut determinization = self.clone();
+
+        // player doesn't know what's in anyone else's hand, so randomize the hidden cards
+        for opponent_idx in determinization.other_player_indexes(player_idx) {
+            for card_idx in determinization.player_active_influence_cards(opponent_idx).collect::<Vec<usize>>() {
+                determinization.replace_influence_card(opponent_idx, card_idx, rng);
+            }
+        }
+
+        // player doesn't know about the order of the deck
+        determinization.deck.shuffle(rng);
+
+        determinization
+    }
+
+    pub fn players_indexes(&self) -> Range<usize> {
+        0..self.players.len()
     }
 
     fn active_player(&self) -> &Player {
