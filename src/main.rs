@@ -64,6 +64,8 @@ struct Coup {
     proposal_blocked_with: Option<Character>,
 }
 
+const PRINT_ACTIONS: bool = false;
+
 
 impl Coup {
     fn new(num_players: u8) -> Self {
@@ -126,7 +128,7 @@ impl Coup {
         self.priority_player_idx = Some(self.next_prio_player_idx());
     }
 
-    fn replace_influence_card(&mut self, player_idx: usize, card_idx: usize) {
+    fn replace_influence_card<R: Rng + Sized>(&mut self, player_idx: usize, card_idx: usize, rng: &mut R) {
         let card = self.players[player_idx].influence_cards.remove(card_idx);
         if card.1 {
             panic!("shouldn't be able to lose/replace a revealed/lost influence card");
@@ -134,8 +136,7 @@ impl Coup {
 
         self.deck.push(card.0);
 
-        let mut rng = thread_rng();
-        self.deck.shuffle(&mut rng);
+        self.deck.shuffle(rng);
 
         // put the card back at the right position
         let card = self.deck.remove(0);
@@ -317,9 +318,12 @@ impl Coup {
         actions
     }
 
-    fn apply_action(&self, action: Action) -> Result<Coup, CoupError> {
+    fn apply_action<R: Rng + Sized>(&self, action: Action, rng: &mut R) -> Result<Coup, CoupError> {
         let mut game = self.clone();
-        println!("T{}: {} | {:?} -> ${} {:?} | {:?}", self.turn, self.current_player_idx, self.priority_player_idx, self.active_player().money, self.active_player().influence_cards, action);
+
+        if PRINT_ACTIONS {
+            println!("T{}: {} | {:?} -> ${} {:?} | {:?}", self.turn, self.current_player_idx, self.priority_player_idx, self.active_player().money, self.active_player().influence_cards, action);
+        }
 
         match action {
             Action::Propose(_, proposed_action) => {
@@ -396,7 +400,7 @@ impl Coup {
                 }
             }
             Action::Reveal(player_idx, card_idx) => {
-                game.replace_influence_card(player_idx, card_idx);
+                game.replace_influence_card(player_idx, card_idx, rng);
                 match game.state {
                     State::AwaitingChallengedBlockResponse(_, challenger_player_idx) => {
                         game.state = State::AwaitingLoseInfluence(challenger_player_idx, true);
@@ -459,7 +463,7 @@ impl Coup {
                                 game.go_next_turn();
                             }
                             Action::Exchange(_, card_idx) => {
-                                game.replace_influence_card(game.current_player_idx, *card_idx);
+                                game.replace_influence_card(game.current_player_idx, *card_idx, rng);
                                 game.go_next_turn();
                             }
                             _ => unreachable!("proposal is not actionable")
@@ -527,32 +531,31 @@ impl Coup {
 fn main() {
     let mut rng = thread_rng();
 
+    let mut coup = Coup::new(4);
     for _ in 0..100 {
-        let mut coup = Coup::new(4);
-        for _ in 0..100 {
-            let mut actions = coup.actions();
+        let mut actions = coup.actions();
 
-            if actions.is_empty() {
-                println!("no actions");
-                coup.actions();
-                break;
-            }
+        if actions.is_empty() {
+            println!("no actions");
+            coup.actions();
+            break;
+        }
 
-            let random_index = rng.gen_range(0..actions.len());
-            let random_action = actions.remove(random_index);
+        let random_index = rng.gen_range(0..actions.len());
+        let random_action = actions.remove(random_index);
 
-            coup = coup.apply_action(random_action).unwrap();
+        coup = coup.apply_action(random_action, &mut rng).unwrap();
 
-            if let Some(winner_idx) = coup.winner() {
-                println!("game over, player {winner_idx} wins");
-                break;
-            }
+        if let Some(winner_idx) = coup.winner() {
+            println!("game over, player {winner_idx} wins");
+            break;
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use rand::thread_rng;
     use crate::action::{Action};
     use crate::action::Action::{Income, Lose, Pass, Assassinate, Resolve, Challenge, Reveal, Steal, Block};
     use crate::Character::{Ambassador, Assassin, Captain, Duke};
@@ -572,7 +575,8 @@ mod tests {
     }
 
     fn try_action(game: Coup, f: Box<dyn Fn(&Action) -> bool>) -> Coup {
-        match game.apply_action(find_action(&game, f)) {
+        let mut rng = thread_rng();
+        match game.apply_action(find_action(&game, f), &mut rng) {
             Ok(game) => {
                 game
             }
