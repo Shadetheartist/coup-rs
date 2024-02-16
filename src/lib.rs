@@ -48,11 +48,11 @@ struct Player {
 }
 
 #[derive(Debug)]
-enum CoupError {}
+pub enum CoupError {}
 
 
 #[derive(Clone)]
-struct Coup {
+pub struct Coup {
     turn: usize,
     current_player_idx: usize,
     deck: Vec<Character>,
@@ -68,7 +68,7 @@ const PRINT_ACTIONS: bool = false;
 
 
 impl Coup {
-    fn new(num_players: u8) -> Self {
+    pub fn new(num_players: u8) -> Self {
         let mut deck: Vec<Character> = CHARACTER_VARIANTS.iter()
             .flat_map(|&card| std::iter::repeat(card).take(3))
             .collect();
@@ -178,7 +178,7 @@ impl Coup {
             .position(|e| !e.1 && e.0 == character)
     }
 
-    fn actions(&self) -> Vec<Action> {
+    pub fn actions(&self) -> Vec<Action> {
         let mut actions = vec![];
 
         match self.state {
@@ -318,7 +318,7 @@ impl Coup {
         actions
     }
 
-    fn apply_action<R: Rng + Sized>(&self, action: Action, rng: &mut R) -> Result<Coup, CoupError> {
+    pub fn apply_action<R: Rng + Sized>(&self, action: Action, rng: &mut R) -> Result<Coup, CoupError> {
         let mut game = self.clone();
 
         if PRINT_ACTIONS {
@@ -477,7 +477,7 @@ impl Coup {
         Ok(game)
     }
 
-    fn winner(&self) -> Option<usize> {
+    pub fn winner(&self) -> Option<usize> {
         let game_over = self.players
             .iter()
             .filter(|player| {
@@ -525,31 +525,6 @@ impl Coup {
         }
 
         idx
-    }
-}
-
-fn main() {
-    let mut rng = thread_rng();
-
-    let mut coup = Coup::new(4);
-    for _ in 0..100 {
-        let mut actions = coup.actions();
-
-        if actions.is_empty() {
-            println!("no actions");
-            coup.actions();
-            break;
-        }
-
-        let random_index = rng.gen_range(0..actions.len());
-        let random_action = actions.remove(random_index);
-
-        coup = coup.apply_action(random_action, &mut rng).unwrap();
-
-        if let Some(winner_idx) = coup.winner() {
-            println!("game over, player {winner_idx} wins");
-            break;
-        }
     }
 }
 
