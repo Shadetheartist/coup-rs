@@ -396,7 +396,7 @@ impl Coup {
                 game.replace_influence_card(player_idx, card_idx);
                 match game.state {
                     State::AwaitingChallengedBlockResponse(_, challenger_player_idx) => {
-                        game.state = State::AwaitingLoseInfluence(challenger_player_idx, false);
+                        game.state = State::AwaitingLoseInfluence(challenger_player_idx, true);
                         game.priority_player_idx = Some(challenger_player_idx);
                     }
                     State::AwaitingChallengedProposalResponse(challenger_player_idx) => {
@@ -580,8 +580,6 @@ mod tests {
         // p0 wins challenge
         coup = try_action(coup, Box::new(|a| *a == Reveal(0, 0)));
 
-        println!("{:?}", coup.actions());
-
         // p1 loses card
         coup = try_action(coup, Box::new(|a| *a == Lose(1, 0, false)));
 
@@ -651,7 +649,6 @@ mod tests {
         coup = try_action(coup, Box::new(|a| *a == Pass(1)));
 
         // p2 blocks
-        println!("{:?}", coup.actions());
         coup = try_action(coup, Box::new(|a| *a == Block(2, Ambassador)));
 
         // p0 challenges
@@ -660,8 +657,9 @@ mod tests {
         // p2 reveals & wins
         coup = try_action(coup, Box::new(|a| *a == Reveal(2, 0)));
 
-        // p0 loses a card
-        coup = try_action(coup, Box::new(|a| *a == Lose(0, 0, false)));
+        println!("{:?}", coup.actions());
+        // p0 loses a card, and the game ends
+        coup = try_action(coup, Box::new(|a| *a == Lose(0, 0, true)));
 
         // next action should be player 1 choice
         find_action(&coup, Box::new(|a| *a == Income(1)));
