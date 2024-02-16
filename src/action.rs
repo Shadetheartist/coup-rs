@@ -14,7 +14,7 @@ pub enum Action {
     Block(usize, Character),
     Relent(usize),
     Challenge(usize),
-    Lose(usize, usize, bool), // index of card revealed & lost, and if to end the turn after the loss
+    Lose(usize, usize), // index of card revealed & lost, and if to end the turn after the loss
     Reveal(usize, usize), // index of card exchanged
     Pass(usize),
     Resolve(usize)
@@ -54,8 +54,8 @@ impl Debug for Action {
             Action::Challenge(player_idx) => {
                 f.write_fmt(format_args!("Player {player_idx} challenges"))
             }
-            Action::Lose(player_idx, card_idx, end_turn) => {
-                f.write_fmt(format_args!("Player {player_idx} loses card {card_idx} (turn ends = {end_turn})"))
+            Action::Lose(player_idx, card_idx) => {
+                f.write_fmt(format_args!("Player {player_idx} loses card {card_idx}"))
             }
             Action::Reveal(player_idx, card_idx) => {
                 f.write_fmt(format_args!("Player {player_idx} reveals & exchanges card {card_idx}"))

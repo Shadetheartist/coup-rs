@@ -264,7 +264,7 @@ impl Coup {
                     Some(priority_player_idx) => {
                         // can lose if forced, or on purpose
                         for card_idx in self.player_active_influence_cards(priority_player_idx) {
-                            actions.push(Action::Lose(priority_player_idx, card_idx, false));
+                            actions.push(Action::Lose(priority_player_idx, card_idx));
                         }
 
                         match self.proposal_blocked_with {
@@ -282,7 +282,7 @@ impl Coup {
             State::AwaitingChallengedProposalResponse(_) => {
                 // can lose if forced, or on purpose
                 for card_idx in self.player_active_influence_cards(self.current_player_idx) {
-                    actions.push(Action::Lose(self.current_player_idx, card_idx, true));
+                    actions.push(Action::Lose(self.current_player_idx, card_idx));
                 }
 
                 match &self.proposal {
@@ -302,9 +302,9 @@ impl Coup {
                     }
                 }
             }
-            State::AwaitingLoseInfluence(loser_player_idx, end_turn) => {
+            State::AwaitingLoseInfluence(loser_player_idx, _) => {
                 for card_idx in self.player_active_influence_cards(loser_player_idx) {
-                    actions.push(Action::Lose(loser_player_idx, card_idx, end_turn));
+                    actions.push(Action::Lose(loser_player_idx, card_idx));
                 }
             }
             State::ResolveProposal => {
@@ -365,7 +365,7 @@ impl Coup {
                     _ => unreachable!("only the proposal and block actions can be challenged")
                 }
             }
-            Action::Lose(loser_player_idx, card_idx, end_turn) => {
+            Action::Lose(loser_player_idx, card_idx) => {
                 match game.state {
                     State::AwaitingChallengedProposalResponse(_) => {
                         game.lose_influence_card(loser_player_idx, card_idx);
@@ -380,7 +380,7 @@ impl Coup {
                             game.go_next_turn();
                         }
                     }
-                    State::AwaitingLoseInfluence(_, _) => {
+                    State::AwaitingLoseInfluence(_, end_turn) => {
                         game.lose_influence_card(loser_player_idx, card_idx);
                         game.priority_player_idx = Some(game.current_player_idx);
                         game.state = State::ResolveProposal;
@@ -583,13 +583,13 @@ mod tests {
         coup = try_action(coup, Box::new(|a| *a == Reveal(0, 0)));
 
         // p1 loses card
-        coup = try_action(coup, Box::new(|a| *a == Lose(1, 0, false)));
+        coup = try_action(coup, Box::new(|a| *a == Lose(1, 0)));
 
         // p0 resolves
         coup = try_action(coup, Box::new(|a| *a == Resolve(0)));
 
         // p1 loses another card
-        coup = try_action(coup, Box::new(|a| *a == Lose(1, 1, true)));
+        coup = try_action(coup, Box::new(|a| *a == Lose(1, 1)));
 
         // next action should be player 2 choice, p1 is dead
         find_action(&coup, Box::new(|a| *a == Income(2)));
@@ -625,7 +625,7 @@ mod tests {
 
         coup = try_action(coup, Box::new(|a| *a == Resolve(0)));
 
-        coup = try_action(coup, Box::new(|a| *a == Lose(1, 0, true)));
+        coup = try_action(coup, Box::new(|a| *a == Lose(1, 0)));
 
         // next action should be player 1 choice
         find_action(&coup, Box::new(|a| *a == Income(1)));
@@ -690,7 +690,7 @@ mod tests {
         coup = try_action(coup, Box::new(|a| *a == Reveal(2, 0)));
 
         // p0 loses a card, and the game ends
-        coup = try_action(coup, Box::new(|a| *a == Lose(0, 0, true)));
+        coup = try_action(coup, Box::new(|a| *a == Lose(0, 0)));
 
         // next action should be player 1 choice
         find_action(&coup, Box::new(|a| *a == Income(1)));
@@ -715,7 +715,7 @@ mod tests {
 
         println!("{:?}", coup.actions());
 
-        coup = try_action(coup, Box::new(|a| *a == Lose(1, 0, true)));
+        coup = try_action(coup, Box::new(|a| *a == Lose(1, 0)));
 
         // next action should be player 1 choice
         find_action(&coup, Box::new(|a| *a == Income(1)));
