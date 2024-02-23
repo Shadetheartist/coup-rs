@@ -1,6 +1,7 @@
 mod action;
 mod ai;
 
+use std::fmt::{Debug, Formatter};
 use std::ops::{Deref, Range};
 use rand::seq::SliceRandom;
 use rand::{Rng, thread_rng};
@@ -63,6 +64,16 @@ pub struct Coup {
     priority_player_idx: Option<usize>,
     proposal: Option<Action>,
     proposal_blocked_with: Option<Character>,
+}
+
+impl Debug for Coup {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(format!("T {} | P {} | P* {:?}\n", self.turn, self.current_player_idx, self.priority_player_idx).as_str())?;
+        for (player_idx, player) in self.players.iter().enumerate() {
+            f.write_str(format!("\tP {player_idx}: ${} | {:?}, {:?}\n", player.money, player.influence_cards[0], player.influence_cards[1]).as_str())?;
+        }
+        Ok(())
+    }
 }
 
 const PRINT_ACTIONS: bool = false;

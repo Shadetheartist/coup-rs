@@ -34,7 +34,6 @@ fn simulate<R: Rng + Sized>(game: &Coup, rng: &mut R) -> usize {
             return 0;
         }
     }
-
 }
 
 fn ismcts<R: Rng + Sized + Clone + std::marker::Send>(game: &Coup, rng: &mut R, num_determinizations: usize, num_simulations: usize) -> Action {
@@ -72,7 +71,6 @@ fn ismcts<R: Rng + Sized + Clone + std::marker::Send>(game: &Coup, rng: &mut R, 
 
                     determinization_scores_ref_clone.lock().unwrap().push(action_scores);
                 });
-
             }
         }
     });
@@ -117,16 +115,15 @@ mod tests {
     use crate::ai::{ismcts, Turn};
     use crate::Coup;
 
-    //#[test]
+    #[test]
     fn run_test_simulation() {
-
-        let base_determinations = 1;
-        let base_simulations = 1;
-        let mut ai_strengths: Vec<(usize, usize)> = (0..6).map(|_|(base_determinations, base_simulations)).collect();
+        let base_determinations = 4;
+        let base_simulations = 1000;
+        let mut ai_strengths: Vec<(usize, usize)> = (0..6).map(|_| (base_determinations, base_simulations)).collect();
         let mut results: Vec<(Vec<(usize, usize)>, Vec<usize>)> = Vec::new();
         let mut behaviors: HashMap<Vec<(usize, usize)>, Vec<Vec<Turn>>> = HashMap::new();
-        let num_batches = 5;
-        let num_sims = 100;
+        let num_batches = 1;
+        let num_sims = 1;
 
         for batch_count in 0..num_batches {
 
@@ -135,13 +132,12 @@ mod tests {
             //    (str.0, str.1 + (batch_count as usize) * 10)
             //}).collect();
 
-            ai_strengths[0].0 += 5;
-            ai_strengths[0].0 = 10;
+            //ai_strengths[0].0 += 5;
+            //ai_strengths[0].0 = 10;
 
             let mut sim_results: Vec<usize> = ai_strengths.iter().map(|_| 0).collect();
 
             for simulation_count in 0..num_sims {
-
                 let mut turn_batch: Vec<Turn> = Vec::new();
                 let seed: u64 = 12345 + batch_count + simulation_count * batch_count;
                 let mut rng = Pcg64::seed_from_u64(seed);
@@ -152,7 +148,17 @@ mod tests {
                     let strength = ai_strengths[game.current_player_idx];
 
                     let ai_selected_action = ismcts(&game, &mut rng, strength.0, strength.1);
-                    println!("AI selected action {:?}", ai_selected_action);
+                    match ai_selected_action {
+                        Action::Coup(_, _) |
+                        Action::Income(_) |
+                        Action::Propose(_, _) => {
+                            println!("\nState: {:?}", game);
+                        }
+                        _ => {}
+                    }
+
+                    println!("{:?}", ai_selected_action);
+
 
                     match ai_selected_action {
                         Action::Propose(_, _) |
@@ -182,11 +188,10 @@ mod tests {
                             behaviors.insert(ai_strengths.clone(), vec![turn_batch.clone()]);
                         }
 
-                        break
+                        break;
                     }
                 }
             }
-
 
 
             results.push((ai_strengths.clone(), sim_results.clone()))
@@ -202,7 +207,6 @@ mod tests {
             "p3 determinations", "p3 simulations",
             "p4 determinations", "p4 simulations",
             "p5 determinations", "p5 simulations",
-
             "sims",
             "p0 wins",
             "p1 wins",
@@ -210,7 +214,6 @@ mod tests {
             "p3 wins",
             "p4 wins",
             "p5 wins",
-
         ]).unwrap();
 
         for r in results {
@@ -221,7 +224,6 @@ mod tests {
                 format!("{}", r.0[3].0), format!("{}", r.0[3].1),
                 format!("{}", r.0[4].0), format!("{}", r.0[4].1),
                 format!("{}", r.0[5].0), format!("{}", r.0[5].1),
-
                 format!("{}", num_sims),
                 format!("{}", r.1[0]),
                 format!("{}", r.1[1]),
@@ -235,7 +237,6 @@ mod tests {
         std::fs::remove_dir_all("out").unwrap();
 
         for (ai_str, results) in behaviors.iter() {
-
             let dir_str = format!("out/{:?}", ai_str);
             std::fs::create_dir_all(&dir_str).unwrap();
 
