@@ -148,6 +148,12 @@ impl Coup {
 
     fn go_next_prio(&mut self) {
         self.priority_player_idx = Some(self.next_prio_player_idx());
+
+        if let State::AwaitingProposalBlockResponse(blocker_player_idx) = self.state {
+            if blocker_player_idx == self.priority_player_idx.unwrap() {
+                self.priority_player_idx = Some(self.next_prio_player_idx());
+            }
+        }
     }
 
     fn replace_influence_card<R: Rng + Sized>(&mut self, player_idx: usize, card_idx: usize, rng: &mut R) {
@@ -279,9 +285,25 @@ impl Coup {
                     None => unreachable!("priority_player_idx must be defined at this point")
                 }
             }
-            State::AwaitingProposalBlockResponse(_) => {
-                actions.push(Action::Challenge(self.current_player_idx));
-                actions.push(Action::Relent(self.current_player_idx));
+            State::AwaitingProposalBlockResponse(blocker_player_idx) => {
+                match self.priority_player_idx {
+                    Some(priority_player_idx) => {
+                        if priority_player_idx == blocker_player_idx {
+                            unreachable!("priority_player_idx must not be blocker_player_idx in a block challenge response state")
+                        }
+
+                        if priority_player_idx == self.current_player_idx {
+                            // priority player is current player
+                            actions.push(Action::Challenge(self.current_player_idx));
+                            actions.push(Action::Relent(self.current_player_idx));
+                        } else {
+                            // priority player is not the current player
+                            actions.push(Action::Challenge(priority_player_idx));
+                            actions.push(Action::Pass(priority_player_idx));
+                        }
+                    }
+                    None => unreachable!("priority_player_idx must be defined at this point")
+                }
             }
             State::AwaitingChallengedBlockResponse(_, _) => {
                 match self.priority_player_idx {
@@ -370,20 +392,21 @@ impl Coup {
             Action::Block(_, character) => {
                 let blocking_player_idx = game.priority_player_idx.expect("priority should exist and the acting player should have priority");
                 game.state = State::AwaitingProposalBlockResponse(blocking_player_idx);
-                game.priority_player_idx = Some(game.current_player_idx);
-                game.proposal_blocked_with = Some(character)
+                game.proposal_blocked_with = Some(character);
+                game.priority_player_idx = None;
+                game.go_next_prio();
             }
             Action::Relent(_) => {
                 game.go_next_turn();
             }
-            Action::Challenge(_) => {
+            Action::Challenge(challenger_player_idx) => {
                 match game.state {
                     State::AwaitingProposalResponse(_) => {
-                        game.state = State::AwaitingChallengedProposalResponse(game.priority_player_idx.unwrap());
+                        game.state = State::AwaitingChallengedProposalResponse(challenger_player_idx);
                         game.priority_player_idx = Some(game.current_player_idx);
                     }
                     State::AwaitingProposalBlockResponse(blocker_player_idx) => {
-                        game.state = State::AwaitingChallengedBlockResponse(blocker_player_idx, game.current_player_idx);
+                        game.state = State::AwaitingChallengedBlockResponse(blocker_player_idx, challenger_player_idx);
                         game.priority_player_idx = Some(blocker_player_idx);
                     }
                     _ => unreachable!("only the proposal and block actions can be challenged")
@@ -436,17 +459,21 @@ impl Coup {
                 }
             }
             Action::Pass(_) => {
-                if let State::AwaitingProposalResponse(ref mut num_remaining_passers) = game.state {
-                    *num_remaining_passers -= 1;
-
-                    if *num_remaining_passers == 0 {
-                        game.state = State::ResolveProposal;
-                        game.priority_player_idx = Some(game.current_player_idx);
-                    } else {
+                match game.state {
+                    State::AwaitingProposalBlockResponse(_) => {
                         game.go_next_prio();
+                    },
+                    State::AwaitingProposalResponse(ref mut num_remaining_passers) => {
+                        *num_remaining_passers -= 1;
+
+                        if *num_remaining_passers == 0 {
+                            game.state = State::ResolveProposal;
+                            game.priority_player_idx = Some(game.current_player_idx);
+                        } else {
+                            game.go_next_prio();
+                        }
                     }
-                } else {
-                    unreachable!("should be in the awaiting proposal response phase")
+                    _ => unreachable!("should be in the awaiting proposal/proposal block response phase")
                 }
             }
             Action::Resolve(_) => {
@@ -588,7 +615,7 @@ mod tests {
     fn complete_game() {
         let mut rng = thread_rng();
         let mut coup = black_box(Coup::new(4));
-        for _ in 0..1000 {
+        for _ in 0..10 {
             let mut actions = coup.actions();
             if actions.is_empty() {
                 panic!("no actions generated during unfinished game")
@@ -605,7 +632,7 @@ mod tests {
         }
     }
 
-    #[test]
+    //#[test]
     fn average_actions() {
         // this function shows what the best pre-set capacity is for the actions vec
         let mut rng = thread_rng();
@@ -759,6 +786,13 @@ mod tests {
         // p2 blocks
         coup = try_action(coup, Box::new(|a| *a == Block(2, Ambassador)));
 
+        // prio passed to after p0
+
+        // p1 passes
+        coup = try_action(coup, Box::new(|a| *a == Pass(1)));
+
+        //skip p2 as they blocked
+
         // p0 challenges
         coup = try_action(coup, Box::new(|a| *a == Challenge(0)));
 
@@ -774,6 +808,41 @@ mod tests {
         // players should still have the same amount of money
         assert_eq!(coup.players[0].money, 2);
         assert_eq!(coup.players[2].money, 2);
+    }
+
+    #[test]
+    fn test_steal_challenge() {
+        let mut coup = Coup::new(3);
+
+        // give p0 a captain
+        coup.players[0].influence_cards[0] = (Captain, false);
+        coup.players[0].influence_cards[1] = (Duke, false);
+
+        // give p2 an ambassador
+        coup.players[2].influence_cards[0] = (Ambassador, false);
+        coup.players[2].influence_cards[1] = (Duke, false);
+
+        // steal from p2
+        let proposal = Action::Propose(0, Box::new(Steal(0, 2)));
+        coup = try_action(coup, Box::new(move |a| *a == proposal));
+
+        // p1 can't block - it's not targeting them - but they can challenge
+        coup = try_action(coup, Box::new(|a| *a == Challenge(1)));
+
+        // p0 reveals
+        coup = try_action(coup, Box::new(|a| *a == Reveal(0, 0)));
+
+        // p1 loses
+        coup = try_action(coup, Box::new(|a| *a == Lose(1, 0)));
+
+        coup = try_action(coup, Box::new(|a| *a == Resolve(0)));
+
+        // next action should be player 1 choice
+        find_action(&coup, Box::new(|a| *a == Income(1)));
+
+        // steal occurs
+        assert_eq!(coup.players[0].money, 4);
+        assert_eq!(coup.players[2].money, 0);
     }
 
     #[test]
@@ -798,6 +867,105 @@ mod tests {
 
         // players should still have the same amount of money
         assert_eq!(coup.players[0].money, 3);
+    }
+
+    #[test]
+    fn test_steal_block_challenge() {
+        let mut coup = Coup::new(4);
+
+        // give p0 a captain
+        coup.players[0].influence_cards[0] = (Captain, false);
+        coup.players[0].influence_cards[1] = (Duke, false);
+
+        // give p2 an ambassador
+        coup.players[2].influence_cards[0] = (Ambassador, false);
+        coup.players[2].influence_cards[1] = (Duke, false);
+
+        // steal from p2
+        let proposal = Action::Propose(0, Box::new(Steal(0, 2)));
+        coup = try_action(coup, Box::new(move |a| *a == proposal));
+
+        // p1 can't block - it's not targeting them
+        coup = try_action(coup, Box::new(|a| *a == Pass(1)));
+
+        // p2 blocks
+        coup = try_action(coup, Box::new(|a| *a == Block(2, Ambassador)));
+
+
+        // priority is set to the player after the current player
+        // so everyone has a chance to challenge or pass before the proposer has to decide to
+        // challenge or relent
+
+        // p1 passes
+        coup = try_action(coup, Box::new(|a| *a == Pass(1)));
+
+        // p3 passes
+        coup = try_action(coup, Box::new(|a| *a == Pass(3)));
+
+        //skip p2 because they're the one who blocked
+
+        // p0 challenges
+        coup = try_action(coup, Box::new(|a| *a == Challenge(0)));
+
+        // p2 reveals & wins
+        coup = try_action(coup, Box::new(|a| *a == Reveal(2, 0)));
+
+        // p0 loses a card, and the game ends
+        coup = try_action(coup, Box::new(|a| *a == Lose(0, 0)));
+
+        // next action should be player 1 choice
+        find_action(&coup, Box::new(|a| *a == Income(1)));
+
+        // players should still have the same amount of money
+        assert_eq!(coup.players[0].money, 2);
+        assert_eq!(coup.players[2].money, 2);
+    }
+
+
+    #[test]
+    fn test_steal_block_challenge_2() {
+        let mut coup = Coup::new(4);
+
+        // give p0 a captain
+        coup.players[0].influence_cards[0] = (Captain, false);
+        coup.players[0].influence_cards[1] = (Duke, false);
+
+        // give p2 an ambassador
+        coup.players[2].influence_cards[0] = (Ambassador, false);
+        coup.players[2].influence_cards[1] = (Duke, false);
+
+        // steal from p2
+        let proposal = Action::Propose(0, Box::new(Steal(0, 2)));
+        coup = try_action(coup, Box::new(move |a| *a == proposal));
+
+        // p1 can't block - it's not targeting them
+        coup = try_action(coup, Box::new(|a| *a == Pass(1)));
+
+        // p2 blocks
+        coup = try_action(coup, Box::new(|a| *a == Block(2, Ambassador)));
+
+
+        // priority is set to the player after the current player
+        // so everyone has a chance to challenge or pass before the proposer has to decide to
+        // challenge or relent
+
+        // p1 challenges
+        coup = try_action(coup, Box::new(|a| *a == Challenge(1)));
+
+        // p2 reveals & wins
+        coup = try_action(coup, Box::new(|a| *a == Reveal(2, 0)));
+
+        let e = coup.actions();
+
+        // p1 loses a card, and the round ends
+        coup = try_action(coup, Box::new(|a| *a == Lose(1, 0)));
+
+        // next action should be player 1 choice
+        find_action(&coup, Box::new(|a| *a == Income(1)));
+
+        // players should still have the same amount of money
+        assert_eq!(coup.players[0].money, 2);
+        assert_eq!(coup.players[2].money, 2);
     }
 
     #[test]

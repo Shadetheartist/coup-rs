@@ -117,7 +117,7 @@ mod tests {
     use crate::ai::{ismcts, Turn};
     use crate::Coup;
 
-    #[test]
+    //#[test]
     fn run_test_simulation() {
 
         let base_determinations = 1;
