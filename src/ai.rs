@@ -2,9 +2,13 @@
 
 use std::sync::{Arc, Mutex};
 use std::thread;
-use rand::{Rng, thread_rng};
+use petgraph::{Directed, Graph};
+use petgraph::graph::NodeIndex;
+use petgraph::prelude::StableGraph;
+use rand::{SeedableRng, Rng};
+use rand_pcg::Pcg64;
 use crate::action::Action;
-use crate::Coup;
+use crate::{Character, Coup};
 
 fn simulate<R: Rng + Sized>(game: &Coup, rng: &mut R) -> usize {
     let mut game = game.clone();
@@ -44,7 +48,7 @@ fn ismcts<R: Rng + Sized + Clone + std::marker::Send>(game: &Coup, rng: &mut R, 
     let mut determinization_scores: Arc<Mutex<Vec<Vec<Vec<f32>>>>> = Arc::new(Mutex::new(Vec::new()));
 
     thread::scope(|scope| {
-        for determinization_count in 0..num_determinizations {
+        for _ in 0..num_determinizations {
             {
                 let mut rng = rng.clone();
                 let actions = actions.clone();
@@ -96,169 +100,119 @@ fn ismcts<R: Rng + Sized + Clone + std::marker::Send>(game: &Coup, rng: &mut R, 
     actions[sorted[0].0].clone()
 }
 
-#[derive(Clone)]
-struct Turn {
-    turn: usize,
-    player_idx: usize,
-    action: Action,
+#[derive(Clone, Eq, PartialEq)]
+pub struct GraphNode {
+    pub turn: usize,
+    pub step: usize,
+    pub player_id: usize,
+    pub action: Action,
+    pub state: Coup
 }
+
+
+pub fn generate_graph(num_sims: u32) -> StableGraph<GraphNode, i32, Directed> {
+    let num_batches = 1;
+
+    let mut graph = StableGraph::new();
+    let mut nodes: Vec<(NodeIndex, GraphNode)> = Vec::new();
+
+    for batch_count in 0..num_batches {
+        for simulation_count in 0..num_sims {
+
+            let seed: u64 = 3; // 12345 + batch_count + (simulation_count as u64) * batch_count;
+            let mut rng = Pcg64::seed_from_u64(seed);
+
+            let mut game = Coup::new(3);
+            let mut step = 0;
+
+            loop {
+                let ai_selected_action = ismcts(&game, &mut rng, 6, 100);
+                match ai_selected_action {
+                    Action::Coup(_, _) |
+                    Action::Income(_) |
+                    Action::Propose(_, _) => {
+                        println!("\nState: {:?}", game);
+                    }
+                    _ => {}
+                }
+
+                println!("{:?}", ai_selected_action);
+
+                match ai_selected_action {
+                    Action::Propose(player_id, _) |
+                    Action::Income(player_id) |
+                    Action::ForeignAid(player_id) |
+                    Action::Tax(player_id) |
+                    Action::Assassinate(player_id, _) |
+                    Action::Coup(player_id, _) |
+                    Action::Steal(player_id, _) |
+                    Action::Exchange(player_id, _) |
+                    Action::Block(player_id, _) |
+                    Action::Relent(player_id) |
+                    Action::Challenge(player_id) |
+                    Action::Lose(player_id, _) |
+                    Action::Reveal(player_id, _) |
+                    Action::Resolve(player_id) => {
+                        let node = GraphNode {
+                            turn: game.turn,
+                            step: step,
+                            player_id: player_id,
+                            action: ai_selected_action.clone(),
+                            state: game.clone()
+                        };
+
+                        let node_index = {
+                            let existing = nodes.iter().find(|n| n.1 == node);
+                            if let Some(existing) = existing {
+                                existing.0
+                            } else {
+                                graph.add_node(node.clone())
+                            }
+                        };
+
+                        if step != 0 {
+                            let last_node = nodes.last();
+                            if let Some(last_node) = last_node {
+                                let existing_edge = graph.find_edge(last_node.0, node_index);
+                                if let Some(existing_edge) = existing_edge {
+                                    let weight = graph.edge_weight(existing_edge).unwrap();
+                                    graph.update_edge(last_node.0, node_index, weight + 1);
+                                } else {
+                                    graph.add_edge(last_node.0, node_index, 1);
+                                }
+                            }
+                        }
+
+
+                        nodes.push((node_index, node));
+                    },
+                    _ => {}
+
+                }
+
+                game = game.apply_action(ai_selected_action, &mut rng).unwrap();
+
+                if let Some(winner) = game.winner() {
+                    println!("game over, winner is player {winner}");
+                    break;
+                }
+
+                step += 1;
+            }
+        }
+    }
+
+    graph
+}
+
 
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use csv::Writer;
-    use rand::{Rng, SeedableRng};
-    use rand_pcg::Pcg64;
-    use crate::action::Action;
-
-    use crate::ai::{ismcts, Turn};
-    use crate::Coup;
+    use crate::ai::{generate_graph};
 
     #[test]
     fn run_test_simulation() {
-        let base_determinations = 4;
-        let base_simulations = 1000;
-        let mut ai_strengths: Vec<(usize, usize)> = (0..6).map(|_| (base_determinations, base_simulations)).collect();
-        let mut results: Vec<(Vec<(usize, usize)>, Vec<usize>)> = Vec::new();
-        let mut behaviors: HashMap<Vec<(usize, usize)>, Vec<Vec<Turn>>> = HashMap::new();
-        let num_batches = 1;
-        let num_sims = 1;
-
-        for batch_count in 0..num_batches {
-
-            // boost all ai strengths
-            //let ai_strengths: Vec<(usize, usize)> = ai_strengths.iter().map(|str| {
-            //    (str.0, str.1 + (batch_count as usize) * 10)
-            //}).collect();
-
-            //ai_strengths[0].0 += 5;
-            //ai_strengths[0].0 = 10;
-
-            let mut sim_results: Vec<usize> = ai_strengths.iter().map(|_| 0).collect();
-
-            for simulation_count in 0..num_sims {
-                let mut turn_batch: Vec<Turn> = Vec::new();
-                let seed: u64 = 12345 + batch_count + simulation_count * batch_count;
-                let mut rng = Pcg64::seed_from_u64(seed);
-
-                let mut game = Coup::new(ai_strengths.len() as u8);
-
-                loop {
-                    let strength = ai_strengths[game.current_player_idx];
-
-                    let ai_selected_action = ismcts(&game, &mut rng, strength.0, strength.1);
-                    match ai_selected_action {
-                        Action::Coup(_, _) |
-                        Action::Income(_) |
-                        Action::Propose(_, _) => {
-                            println!("\nState: {:?}", game);
-                        }
-                        _ => {}
-                    }
-
-                    println!("{:?}", ai_selected_action);
-
-
-                    match ai_selected_action {
-                        Action::Propose(_, _) |
-                        Action::Income(_) |
-                        Action::Challenge(_) |
-                        Action::Block(_, _) |
-                        Action::Resolve(_) |
-                        Action::Coup(_, _) => {
-                            turn_batch.push(Turn {
-                                turn: game.turn,
-                                player_idx: game.current_player_idx,
-                                action: ai_selected_action.clone(),
-                            });
-                        }
-                        _ => {}
-                    }
-
-                    game = game.apply_action(ai_selected_action, &mut rng).unwrap();
-
-                    if let Some(winner) = game.winner() {
-                        println!("game over, winner is player {winner}");
-                        sim_results[winner] += 1;
-
-                        if behaviors.contains_key(&ai_strengths) {
-                            behaviors.get_mut(&ai_strengths).unwrap().push(turn_batch.clone());
-                        } else {
-                            behaviors.insert(ai_strengths.clone(), vec![turn_batch.clone()]);
-                        }
-
-                        break;
-                    }
-                }
-            }
-
-
-            results.push((ai_strengths.clone(), sim_results.clone()))
-        }
-
-        println!("results {:?}", results);
-
-        let mut wtr = Writer::from_path("results.csv").unwrap();
-        wtr.write_record(&[
-            "p0 determinations", "p0 simulations",
-            "p1 determinations", "p1 simulations",
-            "p2 determinations", "p2 simulations",
-            "p3 determinations", "p3 simulations",
-            "p4 determinations", "p4 simulations",
-            "p5 determinations", "p5 simulations",
-            "sims",
-            "p0 wins",
-            "p1 wins",
-            "p2 wins",
-            "p3 wins",
-            "p4 wins",
-            "p5 wins",
-        ]).unwrap();
-
-        for r in results {
-            wtr.write_record(&[
-                format!("{}", r.0[0].0), format!("{}", r.0[0].1),
-                format!("{}", r.0[1].0), format!("{}", r.0[1].1),
-                format!("{}", r.0[2].0), format!("{}", r.0[2].1),
-                format!("{}", r.0[3].0), format!("{}", r.0[3].1),
-                format!("{}", r.0[4].0), format!("{}", r.0[4].1),
-                format!("{}", r.0[5].0), format!("{}", r.0[5].1),
-                format!("{}", num_sims),
-                format!("{}", r.1[0]),
-                format!("{}", r.1[1]),
-                format!("{}", r.1[2]),
-                format!("{}", r.1[3]),
-                format!("{}", r.1[4]),
-                format!("{}", r.1[5]),
-            ]).unwrap();
-        }
-
-        std::fs::remove_dir_all("out").unwrap();
-
-        for (ai_str, results) in behaviors.iter() {
-            let dir_str = format!("out/{:?}", ai_str);
-            std::fs::create_dir_all(&dir_str).unwrap();
-
-            for (set_id, set) in results.iter().enumerate() {
-                let mut wtr = Writer::from_path(format!("{dir_str}/set_{:?}.csv", set_id)).unwrap();
-
-                wtr.write_record(&[
-                    "turn",
-                    "player",
-                    "action",
-                ]).unwrap();
-
-                for turn in set.iter() {
-                    wtr.write_record(&[
-                        format!("{}", turn.turn),
-                        format!("{}", turn.player_idx),
-                        format!("{:?}", turn.action),
-                    ]).unwrap();
-                }
-            }
-        }
-
-        wtr.flush().unwrap();
+        generate_graph(3);
     }
 }

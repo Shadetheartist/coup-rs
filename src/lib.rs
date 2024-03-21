@@ -1,14 +1,17 @@
-mod action;
-mod ai;
+pub mod action;
+pub mod ai;
+
+pub use ai::generate_graph;
+pub use ai::GraphNode;
+pub use action::Action;
 
 use std::fmt::{Debug, Formatter};
 use std::ops::{Deref, Range};
 use rand::seq::SliceRandom;
 use rand::{Rng, thread_rng};
-use crate::action::Action;
 use crate::Character::{Ambassador, Assassin, Captain, Contessa, Duke};
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 enum State {
     AwaitingProposal,
     // num passes remaining
@@ -43,7 +46,7 @@ static CHARACTER_VARIANTS: [Character; 5] = [
 ];
 
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 struct Player {
     money: u8,
     influence_cards: Vec<(Character, bool)>, // (character, revealed)
@@ -53,7 +56,7 @@ struct Player {
 pub enum CoupError {}
 
 
-#[derive(Clone)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct Coup {
     turn: usize,
     current_player_idx: usize,
@@ -966,7 +969,7 @@ mod tests {
         // p2 reveals & wins
         coup = try_action(coup, Box::new(|a| *a == Reveal(2, 0)));
 
-        let e = coup.actions();
+        let _e = coup.actions();
 
         // p1 loses a card, and the round ends
         coup = try_action(coup, Box::new(|a| *a == Lose(1, 0)));
