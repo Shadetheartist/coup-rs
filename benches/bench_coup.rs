@@ -4,7 +4,7 @@ use coup_rs::Coup;
 
 fn complete_game(num_players: u8) {
     let mut rng = thread_rng();
-    let mut coup = black_box(Coup::new(num_players));
+    let mut coup = black_box(Coup::new(num_players, &mut rng));
     for _ in 0..1000 {
         let mut actions = coup.actions();
 

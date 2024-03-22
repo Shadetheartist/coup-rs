@@ -8,7 +8,7 @@ pub use action::Action;
 use std::fmt::{Debug, Formatter};
 use std::ops::{Deref, Range};
 use rand::seq::SliceRandom;
-use rand::{Rng, thread_rng};
+use rand::{Rng};
 use crate::Character::{Ambassador, Assassin, Captain, Contessa, Duke};
 
 #[derive(Clone, Eq, PartialEq)]
@@ -83,13 +83,12 @@ const PRINT_ACTIONS: bool = false;
 
 
 impl Coup {
-    pub fn new(num_players: u8) -> Self {
+    pub fn new<R: Rng + Sized>(num_players: u8, rng: &mut R) -> Self {
         let mut deck: Vec<Character> = CHARACTER_VARIANTS.iter()
             .flat_map(|&card| std::iter::repeat(card).take(3))
             .collect();
 
-        let mut rng = thread_rng();
-        deck.shuffle(&mut rng);
+        deck.shuffle(rng);
 
         let players = (0..num_players).map(|_| Player {
             money: 2,
@@ -602,7 +601,7 @@ mod tests {
 
     fn find_action(game: &Coup, f: Box<dyn Fn(&Action) -> bool>) -> Action {
         let actions = game.actions();
-        let action = actions.iter().find(|a| f(*a));
+        let action = actions.iter().find(|a| f(a));
         match action {
             None => {
                 panic!("action was not found")
@@ -626,9 +625,9 @@ mod tests {
     }
 
     #[test]
-    fn complete_game() {
+    fn check_deterministic() {
         let mut rng = thread_rng();
-        let mut coup = black_box(Coup::new(4));
+        let mut coup = Coup::new(4, &mut rng);
         for _ in 0..10 {
             let mut actions = coup.actions();
             if actions.is_empty() {
@@ -640,19 +639,61 @@ mod tests {
 
             coup = coup.apply_action(random_action, &mut rng).unwrap();
 
-            if let Some(_) = coup.winner() {
+            if coup.winner().is_some() {
                 break;
             }
         }
     }
 
+    #[test]
+    fn complete_game() {
+        let mut rng = thread_rng();
+        let mut coup = Coup::new(3, &mut rng);
+
+
+        // give p0 an assassin
+        coup.players[0].influence_cards[0] = (Assassin, false);
+
+        // give p1 no contessa
+        coup.players[1].influence_cards[0] = (Duke, false);
+        coup.players[1].influence_cards[1] = (Duke, false);
+
+        // income round
+        coup = try_action(coup, Box::new(|a| *a == Income(0)));
+        coup = try_action(coup, Box::new(|a| *a == Income(1)));
+        coup = try_action(coup, Box::new(|a| *a == Income(2)));
+
+        // assassinate
+        let assassinate_proposal = Action::Propose(0, Box::new(Assassinate(0, 1)));
+        coup = try_action(coup, Box::new(move |a| *a == assassinate_proposal));
+
+        // p1 challenges
+        coup = try_action(coup, Box::new(|a| *a == Challenge(1)));
+
+        // p0 wins challenge
+        coup = try_action(coup, Box::new(|a| *a == Reveal(0, 0)));
+
+        // p1 loses card
+        coup = try_action(coup, Box::new(|a| *a == Lose(1, 0)));
+
+        // p0 resolves
+        coup = try_action(coup, Box::new(|a| *a == Resolve(0)));
+
+        // p1 loses another card
+        coup = try_action(coup, Box::new(|a| *a == Lose(1, 1)));
+
+        // next action should be player 2 choice, p1 is dead
+        find_action(&coup, Box::new(|a| *a == Income(2)));
+    }
+
     //#[test]
+    #[allow(dead_code)]
     fn average_actions() {
         // this function shows what the best pre-set capacity is for the actions vec
         let mut rng = thread_rng();
         let mut num_actions: Vec<usize> = Vec::new();
         for _ in 0..1000 {
-            let mut coup = black_box(Coup::new(4));
+            let mut coup = black_box(Coup::new(4, &mut rng));
             for _ in 0..1000 {
                 let mut actions = coup.actions();
                 num_actions.push(actions.len());
@@ -661,13 +702,13 @@ mod tests {
 
                 coup = coup.apply_action(random_action, &mut rng).unwrap();
 
-                if let Some(_) = coup.winner() {
+                if coup.winner().is_some() {
                     break;
                 }
             }
         }
 
-        let sum = num_actions.iter().fold(0, |sum, &val| sum + val);
+        let sum = num_actions.iter().sum::<usize>();
         let greatest = num_actions.iter().fold(0, |sum, &val| if val > sum {val} else {sum});
 
         println!("avg {} | greatest {greatest}",  sum / num_actions.len());
@@ -675,7 +716,9 @@ mod tests {
 
     #[test]
     fn double_assassinate() {
-        let mut coup = Coup::new(3);
+        let mut rng = thread_rng();
+
+        let mut coup = Coup::new(3, &mut rng);
 
         // give p0 an assassin
         coup.players[0].influence_cards[0] = (Assassin, false);
@@ -714,7 +757,8 @@ mod tests {
 
     #[test]
     fn normal_assassinate() {
-        let mut coup = Coup::new(3);
+        let mut rng = thread_rng();
+        let mut coup = Coup::new(3, &mut rng);
 
         // give p0 an assassin
         coup.players[0].influence_cards[0] = (Assassin, false);
@@ -750,7 +794,8 @@ mod tests {
 
     #[test]
     fn test_steal() {
-        let mut coup = Coup::new(3);
+        let mut rng = thread_rng();
+        let mut coup = Coup::new(3, &mut rng);
 
         // give p0 a captain
         coup.players[0].influence_cards[0] = (Captain, false);
@@ -780,7 +825,9 @@ mod tests {
 
     #[test]
     fn test_steal_block() {
-        let mut coup = Coup::new(3);
+        let mut rng = thread_rng();
+        let mut coup = Coup::new(3, &mut rng);
+
 
         // give p0 a captain
         coup.players[0].influence_cards[0] = (Captain, false);
@@ -826,7 +873,9 @@ mod tests {
 
     #[test]
     fn test_steal_challenge() {
-        let mut coup = Coup::new(3);
+        let mut rng = thread_rng();
+        let mut coup = Coup::new(3, &mut rng);
+
 
         // give p0 a captain
         coup.players[0].influence_cards[0] = (Captain, false);
@@ -861,7 +910,9 @@ mod tests {
 
     #[test]
     fn test_coup() {
-        let mut coup = Coup::new(3);
+        let mut rng = thread_rng();
+        let mut coup = Coup::new(3, &mut rng);
+
 
         // give p0 $10
         coup.players[0].money = 10;
@@ -885,7 +936,9 @@ mod tests {
 
     #[test]
     fn test_steal_block_challenge() {
-        let mut coup = Coup::new(4);
+        let mut rng = thread_rng();
+        let mut coup = Coup::new(4, &mut rng);
+
 
         // give p0 a captain
         coup.players[0].influence_cards[0] = (Captain, false);
@@ -938,7 +991,9 @@ mod tests {
 
     #[test]
     fn test_steal_block_challenge_2() {
-        let mut coup = Coup::new(4);
+        let mut rng = thread_rng();
+        let mut coup = Coup::new(4, &mut rng);
+
 
         // give p0 a captain
         coup.players[0].influence_cards[0] = (Captain, false);
@@ -984,7 +1039,9 @@ mod tests {
 
     #[test]
     fn next_actor() {
-        let mut coup = Coup::new(4);
+        let mut rng = thread_rng();
+        let mut coup = Coup::new(4, &mut rng);
+
         assert_eq!(coup.next_prio_player_idx(), 1);
 
         coup.current_player_idx = 1;
@@ -999,7 +1056,9 @@ mod tests {
 
     #[test]
     fn other_players() {
-        let coup = Coup::new(4);
+        let mut rng = thread_rng();
+        let coup = Coup::new(4, &mut rng);
+
         assert_eq!(coup.other_player_indexes(0)[0], 1);
         assert_eq!(coup.other_player_indexes(0)[1], 2);
         assert_eq!(coup.other_player_indexes(0)[2], 3);
@@ -1010,7 +1069,9 @@ mod tests {
         assert_eq!(coup.other_player_indexes(1)[2], 0);
         assert_eq!(coup.other_player_indexes(1).len(), 3);
 
-        let coup = Coup::new(3);
+        let mut rng = thread_rng();
+        let coup = Coup::new(3, &mut rng);
+
         assert_eq!(coup.other_player_indexes(1)[0], 2);
         assert_eq!(coup.other_player_indexes(1)[1], 0);
         assert_eq!(coup.other_player_indexes(1).len(), 2);
