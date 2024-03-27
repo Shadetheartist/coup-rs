@@ -1,7 +1,8 @@
 use std::fmt::{Debug, Formatter};
+use serde::{Deserialize, Serialize};
 use crate::{Character};
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
     Propose(usize, Box<Action>),
     Income(usize),
@@ -70,6 +71,5 @@ impl Debug for Action {
                 f.write_fmt(format_args!("Player {player_idx} resolves their proposal"))
             }
         }
-
     }
 }

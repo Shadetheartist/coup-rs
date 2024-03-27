@@ -9,9 +9,10 @@ use std::fmt::{Debug, Formatter};
 use std::ops::{Deref, Range};
 use rand::seq::SliceRandom;
 use rand::{Rng};
+use serde::{Deserialize, Serialize};
 use crate::Character::{Ambassador, Assassin, Captain, Contessa, Duke};
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 enum State {
     AwaitingProposal,
     // num passes remaining
@@ -28,7 +29,7 @@ enum State {
     ResolveProposal,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Character {
     Duke,
     Assassin,
@@ -46,7 +47,7 @@ static CHARACTER_VARIANTS: [Character; 5] = [
 ];
 
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 struct Player {
     money: u8,
     influence_cards: Vec<(Character, bool)>, // (character, revealed)
@@ -56,7 +57,7 @@ struct Player {
 pub enum CoupError {}
 
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Coup {
     turn: usize,
     current_player_idx: usize,
@@ -72,9 +73,15 @@ pub struct Coup {
 impl Debug for Coup {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(format!("T {} | P {} | P* {:?}\n", self.turn, self.current_player_idx, self.priority_player_idx).as_str())?;
+
         for (player_idx, player) in self.players.iter().enumerate() {
             f.write_str(format!("\tP {player_idx}: ${} | {:?}, {:?}\n", player.money, player.influence_cards[0], player.influence_cards[1]).as_str())?;
         }
+
+        if let Some(winner) = self.winner() {
+            f.write_str(format!("Winner! {winner}").as_str())?;
+        }
+
         Ok(())
     }
 }

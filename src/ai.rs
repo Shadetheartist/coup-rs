@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 use std::thread;
 use petgraph::{Directed};
-use petgraph::graph::NodeIndex;
+use petgraph::graph::{NodeIndex};
 use petgraph::prelude::StableGraph;
 use rand::{SeedableRng, Rng};
 use rand_pcg::Pcg64;
@@ -11,11 +11,14 @@ use crate::action::Action;
 use crate::{Coup};
 
 fn simulate<R: Rng + Sized>(game: &Coup, rng: &mut R) -> usize {
+    if let Some(winner) = game.winner() {
+        return winner;
+    }
+
     let mut game = game.clone();
 
     loop {
         let mut actions = game.actions();
-
         let random_index = rng.gen_range(0..actions.len());
         let random_action = actions.remove(random_index);
 
@@ -107,104 +110,143 @@ fn ismcts<R: Rng + Sized + Clone + std::marker::Send>(game: &Coup, rng: &mut R, 
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct GraphNode {
-    pub weight: u32,
-    pub sim: u32,
-    pub turn: usize,
+    pub sim: usize,
     pub step: usize,
-    pub player_id: usize,
-    pub action: Action,
     pub state: Coup,
 }
 
+#[derive(Clone, Eq, PartialEq)]
+pub struct GraphEdge {
+    pub count: usize,
+    pub action: Action,
+}
 
-pub fn generate_graph(num_sims: u32) -> StableGraph<GraphNode, i32, Directed> {
-    let mut graph: StableGraph<GraphNode, i32, Directed> = StableGraph::new();
+#[derive(Clone)]
+pub struct SimPlayerParams {
+    pub num_determinations: usize,
+    pub num_simulations_per_action: usize,
+}
+
+pub struct SimParams {
+    pub seed: u64,
+    pub num_sims: usize,
+    pub sim_players: Vec<SimPlayerParams>,
+}
+
+impl Default for SimParams {
+    fn default() -> Self {
+        Self {
+            seed: 0,
+            num_sims: 1,
+            sim_players: vec![
+                SimPlayerParams {
+                    num_determinations: 12,
+                    num_simulations_per_action: 100,
+                },
+                SimPlayerParams {
+                    num_determinations: 12,
+                    num_simulations_per_action: 100,
+                },
+                SimPlayerParams {
+                    num_determinations: 12,
+                    num_simulations_per_action: 100,
+                },
+            ],
+        }
+    }
+}
+
+fn add_state_to_graph(
+    graph: &mut StableGraph<GraphNode, GraphEdge, Directed>,
+    nodes: &mut Vec<(NodeIndex, GraphNode)>,
+    game: &Coup,
+    sim_n: usize,
+    step: usize,
+) -> NodeIndex {
+    let node = GraphNode {
+        sim: sim_n,
+        step: step,
+        state: game.clone(),
+    };
+
+    let node_index = {
+        let existing = nodes.iter().find(|n| n.1.state == node.state);
+        if let Some(existing) = existing {
+            existing.0
+        } else {
+            graph.add_node(node.clone())
+        }
+    };
+
+    nodes.push((node_index, node));
+
+    node_index
+}
+
+fn add_action_to_graph(
+    graph: &mut StableGraph<GraphNode, GraphEdge, Directed>,
+    action: Action,
+    prev_state_idx: NodeIndex,
+    new_state_idx: NodeIndex,
+) {
+    let existing_edge = graph.find_edge(prev_state_idx, new_state_idx);
+    if let Some(existing_edge) = existing_edge {
+        let edge = graph.edge_weight(existing_edge).unwrap();
+        graph.update_edge(prev_state_idx, new_state_idx, GraphEdge { action: action, count: edge.count + 1 });
+    } else {
+        graph.add_edge(prev_state_idx, new_state_idx, GraphEdge { action: action, count: 1 });
+    }
+}
+
+pub fn generate_graph(sim_params: SimParams) -> StableGraph<GraphNode, GraphEdge, Directed> {
+    let mut graph: StableGraph<GraphNode, GraphEdge, Directed> = StableGraph::new();
     let mut nodes: Vec<(NodeIndex, GraphNode)> = Vec::new();
 
-    for _simulation_count in 0..num_sims {
-        let seed: u64 = 12345 + (_simulation_count as u64);
-        let mut rng = Pcg64::seed_from_u64(seed);
+    for sim_n in 0..sim_params.num_sims {
+        let mut not_rng = Pcg64::seed_from_u64(sim_params.seed);
+        let mut per_sim_rng = Pcg64::seed_from_u64(sim_params.seed + (sim_n as u64));
 
-        let mut not_rng = Pcg64::seed_from_u64(0);
+        let mut game = Coup::new(sim_params.sim_players.len() as u8, &mut not_rng);
+        let mut step = 0usize;
 
-        let mut game = Coup::new(3, &mut not_rng);
-        let mut step = 0;
+        add_state_to_graph(&mut graph, &mut nodes, &mut game, sim_n, step);
+
+        step += 1;
 
         loop {
-            let ai_selected_action = ismcts(&game, &mut rng, 1, 100);
-            match ai_selected_action {
-                Action::Coup(_, _) |
-                Action::Income(_) |
-                Action::Propose(_, _) => {
-                    //println!("\nState: {:?}", game);
-                }
-                _ => {}
-            }
+            let sim_player = &sim_params.sim_players[game.current_player_idx];
+            let ai_selected_action = ismcts(&game, &mut per_sim_rng, sim_player.num_determinations, sim_player.num_simulations_per_action);
 
-            //println!("{:?}", ai_selected_action);
+            let prev_node_idx = nodes.last().unwrap().0;
+
+            game = game.apply_action(ai_selected_action.clone(), &mut per_sim_rng).unwrap();
 
             match ai_selected_action {
-                Action::Propose(player_id, _) |
-                Action::Income(player_id) |
-                Action::ForeignAid(player_id) |
-                Action::Tax(player_id) |
-                Action::Assassinate(player_id, _) |
-                Action::Coup(player_id, _) |
-                Action::Steal(player_id, _) |
-                Action::Exchange(player_id, _) |
-                Action::Block(player_id, _) |
-                Action::Relent(player_id) |
-                Action::Challenge(player_id) |
-                Action::Lose(player_id, _) |
-                Action::Reveal(player_id, _) |
-                Action::Resolve(player_id) => {
-                    let node = GraphNode {
-                        weight: 1,
-                        sim: _simulation_count,
-                        turn: game.turn,
-                        step,
-                        player_id,
-                        action: ai_selected_action.clone(),
-                        state: game.clone(),
-                    };
-
-                    let node_index = {
-                        let existing = nodes.iter().find(|n| n.1.state == node.state);
-                        if let Some(existing) = existing {
-                            graph.node_weight_mut(existing.0).unwrap().weight += 1;
-                            existing.0
-                        } else {
-                            graph.add_node(node.clone())
-                        }
-                    };
-
-                    if step != 0 {
-                        let last_node = nodes.last();
-                        if let Some(last_node) = last_node {
-                            let existing_edge = graph.find_edge(last_node.0, node_index);
-                            if let Some(existing_edge) = existing_edge {
-                                let weight = graph.edge_weight(existing_edge).unwrap();
-                                graph.update_edge(last_node.0, node_index, weight + 1);
-                            } else {
-                                graph.add_edge(last_node.0, node_index, 1);
-                            }
-                        }
-                    }
-
-
-                    nodes.push((node_index, node));
+                Action::Propose(_player_id, _) |
+                Action::Income(_player_id) |
+                Action::ForeignAid(_player_id) |
+                Action::Tax(_player_id) |
+                Action::Assassinate(_player_id, _) |
+                Action::Coup(_player_id, _) |
+                Action::Steal(_player_id, _) |
+                Action::Exchange(_player_id, _) |
+                Action::Block(_player_id, _) |
+                Action::Relent(_player_id) |
+                Action::Challenge(_player_id) |
+                Action::Lose(_player_id, _) |
+                Action::Reveal(_player_id, _) |
+                Action::Resolve(_player_id) => {
+                    let new_node_idx = add_state_to_graph(&mut graph, &mut nodes, &game, sim_n, step);
+                    add_action_to_graph(&mut graph, ai_selected_action.clone(), prev_node_idx, new_node_idx);
                 }
                 _ => {}
-            }
-
-            game = game.apply_action(ai_selected_action, &mut rng).unwrap();
-
-            if let Some(_winner) = game.winner() {
-                //println!("game over, winner is player {winner}");
-                break;
             }
 
             step += 1;
+
+            if let Some(_winner) = game.winner() {
+                break;
+            }
         }
     }
 
@@ -214,10 +256,10 @@ pub fn generate_graph(num_sims: u32) -> StableGraph<GraphNode, i32, Directed> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ai::{generate_graph};
+    use crate::ai::{generate_graph, SimParams};
 
     #[test]
     fn run_test_simulation() {
-        generate_graph(3);
+        generate_graph(SimParams::default());
     }
 }
