@@ -920,7 +920,6 @@ mod tests {
         let mut rng = thread_rng();
         let mut coup = Coup::new(3, &mut rng);
 
-
         // give p0 $10
         coup.players[0].money = 10;
 

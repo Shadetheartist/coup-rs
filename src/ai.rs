@@ -35,7 +35,7 @@ fn simulate<R: Rng + Sized>(game: &Coup, rng: &mut R) -> usize {
     }
 }
 
-fn ismcts<R: Rng + Sized + Clone + std::marker::Send>(game: &Coup, rng: &mut R, num_determinizations: usize, num_simulations: usize) -> Action {
+fn ismcts<R: Rng + Sized + Clone + Send>(game: &Coup, rng: &mut R, num_determinizations: usize, num_simulations: usize) -> Action {
 
     // actions should be the same between the determinization and the current game
     let actions = game.actions();
