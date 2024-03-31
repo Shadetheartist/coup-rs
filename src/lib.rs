@@ -1,8 +1,6 @@
 pub mod action;
 pub mod ai;
 
-pub use ai::generate_graph;
-pub use ai::GraphNode;
 pub use action::Action;
 
 use std::fmt::{Debug, Formatter};
@@ -29,7 +27,7 @@ enum State {
     ResolveProposal,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum Character {
     Duke,
     Assassin,

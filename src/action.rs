@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 use serde::{Deserialize, Serialize};
 use crate::{Character};
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum Action {
     Propose(usize, Box<Action>),
     Income(usize),
