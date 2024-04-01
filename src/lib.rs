@@ -46,7 +46,7 @@ static CHARACTER_VARIANTS: [Character; 5] = [
 
 
 #[derive(Clone, Eq, PartialEq, Serialize, Deserialize)]
-struct Player {
+pub struct Player {
     money: u8,
     influence_cards: Vec<(Character, bool)>, // (character, revealed)
 }

@@ -34,12 +34,17 @@ impl Mcts<usize, Action> for Coup {
     }
 }
 
-impl <R: Rng + Sized> mcts::Determinable<usize, Action, Coup, R> for Coup {
-    fn determine(&self, rng: &mut R, perspective_player: usize) -> Coup {
+impl mcts::Determinable<usize, Action, Coup> for Coup {
+    fn determine<R: Rng>(&self, rng: &mut R, perspective_player: usize) -> Coup {
         self.determine(rng, perspective_player)
     }
 }
 
+impl mcts::Initializer<usize, Action, Coup> for Coup {
+    fn initialize<R: Rng + Sized>(rng: &mut R) -> Coup {
+        Coup::new(4, rng)
+    }
+}
 
 
 #[cfg(test)]
