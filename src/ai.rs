@@ -17,7 +17,11 @@ impl Mcts<usize, Action> for Coup {
         if let Some(winner_player_idx) = self.winner() {
             Some(Outcome::Winner(winner_player_idx))
         } else {
-            None
+            if self.turn > 100 {
+                Some(Outcome::Escape("Game has taken too many turns".to_string()))
+            } else {
+                None
+            }
         }
     }
 
@@ -40,15 +44,25 @@ impl <R: Rng + Sized> mcts::Determinable<usize, Action, Coup, R> for Coup {
 
 #[cfg(test)]
 mod tests {
+    use mcts::{Mcts, Outcome};
     use rand::{SeedableRng};
     use crate::Coup;
 
     #[test]
     fn run_test_simulation() {
         let mut rng = rand_pcg::Pcg32::seed_from_u64(0);
-        let coup = Coup::new(4, &mut rng);
 
-        let a = mcts::ismcts(&coup, &rng, 4, 4);
-        print!("{:?}",a);
+        let mut coup = Coup::new(4, &mut rng);
+
+        while coup.outcome().is_none() {
+            let a = mcts::mcts(&coup, &mut rng, 100);
+            coup = coup.apply_action(a, &mut rng).unwrap();
+        }
+
+        match coup.outcome().unwrap() {
+            Outcome::Winner(player_idx) => println!("Simulation complete - winner {player_idx}"),
+            Outcome::Winners(_) => {}
+            Outcome::Escape(reason) => println!("Simulation complete - escaped: {reason}")
+        }
     }
 }
