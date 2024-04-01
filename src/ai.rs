@@ -1,4 +1,4 @@
-use mcts::{Mcts, Outcome};
+use ai::{Mcts, Outcome};
 use rand::Rng;
 use crate::{Action, Coup, CoupError};
 
@@ -34,13 +34,13 @@ impl Mcts<usize, Action> for Coup {
     }
 }
 
-impl mcts::Determinable<usize, Action, Coup> for Coup {
+impl ai::Determinable<usize, Action, Coup> for Coup {
     fn determine<R: Rng>(&self, rng: &mut R, perspective_player: usize) -> Coup {
         self.determine(rng, perspective_player)
     }
 }
 
-impl mcts::Initializer<usize, Action, Coup> for Coup {
+impl ai::Initializer<usize, Action, Coup> for Coup {
     fn initialize<R: Rng + Sized>(rng: &mut R) -> Coup {
         Coup::new(4, rng)
     }
@@ -49,7 +49,7 @@ impl mcts::Initializer<usize, Action, Coup> for Coup {
 
 #[cfg(test)]
 mod tests {
-    use mcts::{Mcts, Outcome};
+    use ai::{Mcts, Outcome};
     use rand::{SeedableRng};
     use crate::Coup;
 
@@ -60,7 +60,7 @@ mod tests {
         let mut coup = Coup::new(4, &mut rng);
 
         while coup.outcome().is_none() {
-            let a = mcts::mcts(&coup, &mut rng, 100);
+            let a = ai::mcts(&coup, &mut rng, 100);
             coup = coup.apply_action(a, &mut rng).unwrap();
         }
 
